@@ -79,11 +79,15 @@ def sampling_performance(g, net, n_samples=16):
 
 def run(args):
     from functools import partial
-    if args.stag == "normal":
-        dgl.function.sum = partial(stag.stochastic_sum_normal, alpha=args.alpha)
 
-    elif args.stag == "uniform":
-        dgl.function.sum = partial(stag.stochastic_sum_uniform, alpha=args.alpha)
+    if args.stag != "none":
+        dgl.function.copy_src = dgl.function.copy_u = partial(
+            getattr(
+                stag,
+                "stag_copy_src_%s" % args.stag
+            ),
+            alpha=args.alpha
+        )
     
     net = Net(
         layer=args.layer,
