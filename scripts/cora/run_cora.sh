@@ -5,7 +5,7 @@ for units in 32 64 128 256
 do
     for act in "relu" # "elu" # "sigmoid" "relu" "tanh" "leaky_relu"
     do
-        for layer in 'GraphConv' #'SAGEConv' 'GINConv' 'SGConv' 'EdgeConv' 'GINConv'
+        for layer in 'GINConv' # 'SGConv' 'EdgeConv' 'GINConv'
         do
                     for stag in "none" "normal" "uniform" "bernoulli"
                     do

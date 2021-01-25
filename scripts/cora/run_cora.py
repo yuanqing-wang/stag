@@ -15,15 +15,12 @@ class Net(torch.nn.Module):
         ):
         super(Net, self).__init__()
         
-        # local import
-        from dgl.nn import pytorch as dgl_nn
-
         # get activation function from pytorch if specified
         if activation is not None:
             activation = getattr(torch.nn.functional, activation)
 
         # initial layer: in -> hidden
-        self.gn0 = getattr(dgl_nn, layer)(
+        self.gn0 = layer(
             in_feats=in_features, 
             out_feats=hidden_features,
             activation=activation,
@@ -33,9 +30,10 @@ class Net(torch.nn.Module):
         setattr(
             self, 
             "gn%s" % (depth-1), 
-            getattr(dgl_nn ,layer)(
+            layer(
                 in_feats=hidden_features,
                 out_feats=out_features,
+                activation=None,
             )
         )
 
@@ -44,7 +42,7 @@ class Net(torch.nn.Module):
             setattr(
                 self,
                 "gn%s" % idx,
-                getattr(dgl_nn, layer)(
+                layer(
                     in_feats=hidden_features,
                     out_feats=hidden_features,
                     activation=activation
@@ -79,6 +77,7 @@ def sampling_performance(g, net, n_samples=16):
 
 def run(args):
     from functools import partial
+    from dgl.nn import pytorch as dgl_nn
 
     if args.stag != "none":
         dgl.function.copy_src = dgl.function.copy_u = partial(
@@ -89,8 +88,38 @@ def run(args):
             alpha=args.alpha
         )
     
+    
+    if args.layer == "SAGEConv":
+        layer = partial(dgl_nn.SAGEConv, aggregator_type="mean")
+
+    elif args.layer == "GINConv":
+        class Layer(torch.nn.Module):
+            def __init__(self, in_feats, out_feats, activation):
+                super(Layer, self).__init__()
+                if activation == None:
+                    activation = lambda x: x
+                self.d0 = torch.nn.Linear(in_feats, in_feats)
+                self.activation = activation
+                self.d1 = torch.nn.Linear(in_feats, out_feats)
+
+            def forward(self, x):
+                x = self.d0(x)
+                x = self.activation(x)
+                x = self.d1(x)
+                x = self.activation(x)
+                return x
+
+        layer = lambda in_feats, out_feats, activation: dgl_nn.GINConv(
+            apply_func=Layer(in_feats, out_feats, activation=activation),
+            aggregator_type="sum",
+        )
+
+    else:
+        layer = getattr(dgl_nn, args.layer)
+
+
     net = Net(
-        layer=args.layer,
+        layer=layer,
         in_features=1433,
         out_features=7,
         hidden_features=args.hidden_features,
@@ -120,7 +149,7 @@ def run(args):
         optimizer.step()
         
         if idx_epoch % args.report_interval == 0:
-            _accuracy_tr, _accuracy_te, _accuracy_vl = sampling_performance(g, net, n_samples=1)
+            _accuracy_tr, _accuracy_te, _accuracy_vl = sampling_performance(g, net, n_samples=16)
         
         accuracy_tr.append(_accuracy_tr)
         accuracy_te.append(_accuracy_te)
