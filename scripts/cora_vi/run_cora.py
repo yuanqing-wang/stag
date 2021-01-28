@@ -11,9 +11,33 @@ class Net(torch.nn.Module):
             hidden_features, 
             out_features, 
             depth, 
-            activation=None
-        ):
+            activation=None,
+            g_ref=None
+    ):
         super(Net, self).__init__()
+
+        assert g_ref is not None
+        self.a_mu = torch.nn.Parameter(
+            torch.distributions.Normal(1, 1e-3).sample(
+                (
+                    g_ref.number_of_edges(),
+                    depth-2,
+                )
+            )
+        )
+
+        self.a_log_sigma = torch.nn.Parameter(
+            torch.distributions.Normal(
+                -5, -1
+            ).sample(
+                (
+                    g_ref.number_of_edges(),
+                    depth-2,
+                )
+            )
+        )
+
+        self.a_prior = torch.distributions.Normal(1, 0.5)
         
         # get activation function from pytorch if specified
         if activation is not None:
@@ -49,28 +73,31 @@ class Net(torch.nn.Module):
                 )
             )
 
-        if depth == 1:
-            self.gn0 = layer(
-                in_feats=in_features, out_feats=out_features, activation=None
-            )
-
         self.depth = depth
-        
+
+    def condition(self):
+        return torch.distributions.Normal(
+            self.a_mu,
+            self.a_log_sigma.exp()
+        )
+
     def forward(self, g, x):
         # ensure local scope
         g = g.local_var()
 
         x = self.gn0(g, x)
-        # x = torch.nn.Dropout(0.5)(x)
+
+        a = self.condition().rsample()
+        nll_reg = -self.a_prior.log_prob(a).mean()
 
         for idx in range(1, self.depth-1):
+            g.apply_edges(lambda edges: {"a": a[:, idx-1][:, None]})
             x = getattr(self, "gn%s" % idx)(g, x)
-        
-        if self.depth > 1:
-            x = getattr(self, "gn%s" % (self.depth-1))(g, x)
-            # x = torch.nn.Dropout(0.5)(x)
 
-        return x
+        x = getattr(self, "gn%s"%(self.depth-1))(g, x)
+
+        return x, nll_reg
+
 
 def accuracy_between(y_pred, y_true):
     if y_pred.dim() >= 2:
@@ -148,7 +175,8 @@ def run(args):
                     *[getattr(net, "gn%s" % idx).parameters() for idx in range(1, args.depth)]
                 ),
                 "lr": args.lr
-            }
+            },
+            {"params": [net.a_log_sigma, net.a_mu], "lr": 1e-4}
         ]
 
     )
@@ -166,10 +194,10 @@ def run(args):
     for idx_epoch in range(args.n_epochs):
         net.train()
         optimizer.zero_grad()
-        y_pred = net(g, g.ndata['feat'])[g.ndata['train_mask']]
+        y_pred, reg_nll = net(g, g.ndata['feat'])[g.ndata['train_mask']]
         y_true = g.ndata['label'][g.ndata['train_mask']]
 
-        loss = torch.nn.functional.nll_loss(y_pred.log_softmax(dim=-1), y_true)
+        loss = torch.nn.functional.nll_loss(y_pred.log_softmax(dim=-1), y_true) + reg_nll
         loss.backward()
         optimizer.step()
         net.eval()
@@ -192,7 +220,7 @@ def run(args):
     np.save(args.out + "/accuracy_te.npy", accuracy_te)
 
     # best_epoch = accuracy_vl.argmax()
-    best_epoch = 400
+    best_epoch = 500
 
     import pandas as pd
     df = pd.DataFrame.from_dict(
