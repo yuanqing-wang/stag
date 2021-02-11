@@ -29,13 +29,13 @@ class Net(torch.nn.Module):
             activation=activation,
         )
 
-        # last layer: hidden -> out
+        # last layer: hidden -> hidden
         setattr(
             self,
             "gn%s" % (depth-1),
             getattr(dgl_nn ,layer)(
                 in_feats=hidden_features,
-                out_feats=out_features,
+                out_feats=hidden_features,
             )
         )
 
@@ -51,6 +51,13 @@ class Net(torch.nn.Module):
                 )
             )
 
+
+        self.d = torch.nn.Sequential(
+            torch.nn.Linear(hidden_features, hidden_features),
+            torch.nn.ELU(),
+            torch.nn.Linear(hidden_features, out_features),
+        )
+
         self.depth = depth
 
     def forward(self, g, x):
@@ -61,7 +68,13 @@ class Net(torch.nn.Module):
             x = getattr(self, "gn%s" % idx)(g, x)
 
         g.ndata["x"] = x
-        x = dgl.readout.sum_nodes(g, "x")
+        g.ndata["weights"] = torch.distributions.normal.Normal(
+            torch.tensor(1.0, device=g.device),
+            torch.tensor(args.alpha, device=g.device),
+        ).sample(x.shape)
+
+        x = dgl.readout.sum_nodes(g, "x", weight="weights")
+        x = self.d(x)
         return x
 
 def accuracy_between(y_pred, y_true):
@@ -74,20 +87,20 @@ def run(args):
 
     import urllib
     import os
-    if not os.exist("graphs_Kary_Deterministic_Graphs.pkl"):
-        urllib.urlretrieve(
+    if not os.path.exists("graphs_Kary_Deterministic_Graphs.pkl"):
+        urllib.request.urlretrieve(
             "https://github.com/PurdueMINDS/RelationalPooling/raw/master/Synthetic_Data/graphs_Kary_Deterministic_Graphs.pkl",
             "graphs_Kary_Deterministic_Graphs.pkl"
         )
 
-        urllib.urlretrieve(
+        urllib.request.urlretrieve(
             "https://github.com/PurdueMINDS/RelationalPooling/raw/master/Synthetic_Data/y_Kary_Deterministic_Graphs.pt",
             "y_Kary_Deterministic_Graphs.pt"
         )
 
     import pickle
-    adjs = pickle.load(open("/content/graphs_Kary_Deterministic_Graphs.pkl", "rb"))
-    labels = torch.load("/content/y_Kary_Deterministic_Graphs.pt")
+    adjs = pickle.load(open("graphs_Kary_Deterministic_Graphs.pkl", "rb"))
+    labels = torch.load("y_Kary_Deterministic_Graphs.pt")
     graphs = []
     for adj in adjs:
         g = dgl.DGLGraph()
@@ -108,24 +121,9 @@ def run(args):
     y_te = labels[idx_te]
     y_vl = labels[idx_vl]
 
-    def sampling_performance(net, n_samples=16):
-        _accuracy_tr = accuracy_between(
-            net(g_tr, torch.zeros(g_tr.number_of_nodes(), 1, device=g.device)),
-            y_tr,
-        ).item()
-
-        _accuracy_te = accuracy_between(
-            net(g_te, torch.zeros(g_te.number_of_nodes(), 1, device=g.device)),
-            y_te,
-        ).item()
-
-        _accuracy_vl = accuracy_between(
-            net(g_vl, torch.zeros(g_vl.number_of_nodes(), 1, device=g.device)),
-            y_vl,
-        ).item()
-
-        return _accuracy_tr, _accuracy_te, _accuracy_vl
-
+    print(y_tr)
+    print(y_te)
+    print(y_vl)
 
     from functools import partial
     if args.stag == "normal":
@@ -145,12 +143,33 @@ def run(args):
 
     optimizer = torch.optim.Adam(net.parameters(), args.lr)
 
-    ds = dgl.data.CoraGraphDataset()
-    g = ds[0]
-
     if torch.cuda.is_available():
         net = net.to('cuda:0')
-        g = g.to('cuda:0')
+        g_tr = g_tr.to('cuda:0')
+        g_te = g_te.to('cuda:0')
+        g_vl = g_vl.to('cuda:0')
+        y_tr = y_tr.to('cuda:0')
+        y_te = y_te.to('cuda:0')
+        y_vl = y_vl.to('cuda:0')
+
+    def sampling_performance(net, n_samples=16):
+        _accuracy_tr = accuracy_between(
+            net(g_tr, torch.zeros(g_tr.number_of_nodes(), 1, device=g_tr.device)),
+            y_tr,
+        ).item()
+
+        _accuracy_te = accuracy_between(
+            net(g_te, torch.zeros(g_te.number_of_nodes(), 1, device=g_te.device)),
+            y_te,
+        ).item()
+
+        _accuracy_vl = accuracy_between(
+            net(g_vl, torch.zeros(g_vl.number_of_nodes(), 1, device=g_vl.device)),
+            y_vl,
+        ).item()
+
+        return _accuracy_tr, _accuracy_te, _accuracy_vl
+
 
     accuracy_tr = []
     accuracy_te = []
@@ -158,14 +177,23 @@ def run(args):
 
     for idx_epoch in range(args.n_epochs):
         optimizer.zero_grad()
-        y_pred = net(g_tr, torch.zeros(g_tr.number_of_nodes(), 1, device=g_tr.device))
+        y_pred = torch.mean(
+            torch.stack(
+                [
+                    net(g_tr, torch.zeros(g_tr.number_of_nodes(), 1, device=g_tr.device))
+                    for _ in range(16)
+                ],
+                dim=0
+            ),
+            dim=0,
+        )
         y_true = y_tr
         loss = torch.nn.CrossEntropyLoss()(y_pred, y_true)
         loss.backward()
         optimizer.step()
 
         if idx_epoch % args.report_interval == 0:
-            _accuracy_tr, _accuracy_te, _accuracy_vl = sampling_performance(g, net, n_samples=1)
+            _accuracy_tr, _accuracy_te, _accuracy_vl = sampling_performance(net, n_samples=1)
 
         accuracy_tr.append(_accuracy_tr)
         accuracy_te.append(_accuracy_te)
@@ -182,15 +210,15 @@ def run(args):
     np.save(args.out + "/accuracy_te.npy", accuracy_te)
 
 
-    _accuracy_tr, _accuracy_te, _accuracy_vl = sampling_performance(g, net, n_samples=16)
+    _accuracy_tr, _accuracy_te, _accuracy_vl = sampling_performance(net, n_samples=16)
 
 
     import pandas as pd
     df = pd.DataFrame.from_dict(
         {
             "accuracy_tr": [accuracy_tr[-1]],
-            "accuracy_vl": [accuracy_vl[-1]],
             "accuracy_te": [accuracy_te[-1]],
+            "accuracy_vl": [accuracy_vl[-1]],
             "sampled_tr": _accuracy_tr,
             "sampled_te": _accuracy_te,
             "sampled_vl": _accuracy_vl,

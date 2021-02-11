@@ -12,32 +12,9 @@ class Net(torch.nn.Module):
             out_features, 
             depth, 
             activation=None,
-            g_ref=None
-    ):
+            g_ref=None,
+        ):
         super(Net, self).__init__()
-
-        assert g_ref is not None
-        self.a_mu = torch.nn.Parameter(
-            torch.distributions.Normal(1, 1e-3).sample(
-                (
-                    g_ref.number_of_edges(),
-                    depth-2,
-                )
-            )
-        )
-
-        self.a_log_sigma = torch.nn.Parameter(
-            torch.distributions.Normal(
-                -5, -1
-            ).sample(
-                (
-                    g_ref.number_of_edges(),
-                    depth-2,
-                )
-            )
-        )
-
-        self.a_prior = torch.distributions.Normal(1, 0.5)
         
         # get activation function from pytorch if specified
         if activation is not None:
@@ -73,31 +50,73 @@ class Net(torch.nn.Module):
                 )
             )
 
+        if depth == 1:
+            self.gn0 = layer(
+                in_feats=in_features, out_feats=out_features, activation=None
+            )
+
         self.depth = depth
+        
+        assert g_ref is not None
+        self.a_prior = torch.distributions.Normal(1.0, args.a_prior)
+
+        # middle layers 
+        self.a_mu = torch.nn.Parameter(
+            torch.distributions.Normal(1, args.a_mu_init_std).sample(
+                (depth-1, hidden_features)
+            )
+        )
+
+        self.a_log_sigma = torch.nn.Parameter(
+            args.a_log_sigma_init * torch.ones(depth-1, hidden_features)
+        )
+
+        # first layer
+        self.a_mu_first = torch.nn.Parameter(
+            torch.distributions.Normal(1, args.a_mu_init_std).sample(
+                [in_features]
+            )
+        )
+
+        self.a_log_sigma_first = torch.nn.Parameter(
+            args.a_log_sigma_init * torch.ones(in_features)
+        )
+
+        '''
+        # last layer
+        self.a_mu_last = torch.nn.Parameter(
+            torch.distributions.Normal(1, args.a_mu_init_std).sample(
+                [out_features]
+            )
+        )
+
+        self.a_log_sigma_last = torch.nn.Parameter(
+            args.a_log_sigma_init * torch.ones(out_features)
+        )
+        '''
 
     def condition(self):
-        return torch.distributions.Normal(
-            self.a_mu,
-            self.a_log_sigma.exp()
-        )
+        a_dist = torch.distributions.Normal(self.a_mu, self.a_log_sigma.exp())
+        a_dist_first = torch.distributions.Normal(self.a_mu_first, self.a_log_sigma_first.exp())
+        return a_dist, a_dist_first
 
     def forward(self, g, x):
         # ensure local scope
         g = g.local_var()
 
+        a_dist, a_dist_first = self.condition()
+        a, a_first = a_dist.rsample([g.number_of_edges()]), a_dist_first.rsample([g.number_of_edges()])
+
+        nll_reg = -self.a_prior.log_prob(a).mean() - self.a_prior.log_prob(a_first).mean()
+
+        g.edata["a"] = a_first
         x = self.gn0(g, x)
 
-        a = self.condition().rsample()
-        nll_reg = -self.a_prior.log_prob(a).mean()
-
-        for idx in range(1, self.depth-1):
-            g.apply_edges(lambda edges: {"a": a[:, idx-1][:, None]})
+        for idx in range(1, self.depth):
+            g.edata["a"] = a[:, idx-1, :]
             x = getattr(self, "gn%s" % idx)(g, x)
 
-        x = getattr(self, "gn%s"%(self.depth-1))(g, x)
-
         return x, nll_reg
-
 
 def accuracy_between(y_pred, y_true):
     if y_pred.dim() >= 2:
@@ -105,7 +124,7 @@ def accuracy_between(y_pred, y_true):
     return (y_pred == y_true).sum() / y_pred.shape[0]
 
 def sampling_performance(g, net, n_samples=16):
-    y_pred = torch.stack([net(g, g.ndata['feat']).detach() for _ in range(n_samples)], dim=0).mean(dim=0)
+    y_pred = torch.stack([net(g, g.ndata['feat'])[0].detach() for _ in range(n_samples)], dim=0).mean(dim=0)
     y_true = g.ndata['label']
 
     _accuracy_tr = accuracy_between(y_pred[g.ndata['train_mask']], y_true[g.ndata['train_mask']]).item()
@@ -117,46 +136,20 @@ def sampling_performance(g, net, n_samples=16):
 def run(args):
     from functools import partial
     from dgl.nn import pytorch as dgl_nn
-
-    if args.stag.startswith("none") == False:
-        dgl.function.copy_src = dgl.function.copy_u = partial(
-            getattr(
-                stag,
-                "stag_copy_src_%s" % args.stag
-            ),
-            alpha=args.alpha
-        )
     
+    def stag_copy_src_vi(src="h", out="m"):
+        def message_fun(edges):
+            if "a" in edges.data:
+                return {out: edges.src[src] * edges.data["a"]}
+            return {out: edges.src[src]}
+
+        return message_fun
+
+    dgl.function.copy_src = dgl.function.copy_u = stag_copy_src_vi 
     
-    if args.layer == "SAGEConv":
-        layer = partial(dgl_nn.SAGEConv, aggregator_type="mean")
-
-    elif args.layer == "GINConv":
-        class Layer(torch.nn.Module):
-            def __init__(self, in_feats, out_feats, activation):
-                super(Layer, self).__init__()
-                if activation == None:
-                    activation = lambda x: x
-                self.d0 = torch.nn.Linear(in_feats, in_feats)
-                self.activation = activation
-                self.d1 = torch.nn.Linear(in_feats, out_feats)
-
-            def forward(self, x):
-                x = self.d0(x)
-                x = self.activation(x)
-                x = self.d1(x)
-                x = self.activation(x)
-                return x
-
-        layer = lambda in_feats, out_feats, activation: dgl_nn.GINConv(
-            apply_func=Layer(in_feats, out_feats, activation=activation),
-            aggregator_type="sum",
-        )
-
-    else:
-        layer = getattr(dgl_nn, args.layer)
-
-
+    ds = dgl.data.CoraGraphDataset()
+    g = ds[0]
+    layer = getattr(dgl_nn, args.layer)
     net = Net(
         layer=layer,
         in_features=1433,
@@ -164,25 +157,30 @@ def run(args):
         hidden_features=args.hidden_features,
         activation=args.activation,
         depth=args.depth,
+        g_ref = g,
     )
 
+    print(net)
+    
     import itertools
     optimizer = torch.optim.Adam(
         [
-            {"params": net.gn0.parameters(), "lr": args.lr, "weight_decay": 5e-4},
+            {"params": net.gn0.parameters(), "lr": args.lr, "weight_decay": 5e-3},
             {
                 "params": itertools.chain(
                     *[getattr(net, "gn%s" % idx).parameters() for idx in range(1, args.depth)]
                 ),
                 "lr": args.lr
             },
-            {"params": [net.a_log_sigma, net.a_mu], "lr": 1e-4}
+            {
+                "params": [net.a_mu, net.a_log_sigma, net.a_mu_first, net.a_log_sigma_first],
+                "lr": args.lr_vi
+            }
         ]
 
     )
-    ds = dgl.data.CoraGraphDataset()
-    g = ds[0]
 
+    optimizer = torch.optim.Adam(net.parameters(), 1e-3)
     if torch.cuda.is_available():
         net = net.to('cuda:0')
         g = g.to('cuda:0')
@@ -194,10 +192,11 @@ def run(args):
     for idx_epoch in range(args.n_epochs):
         net.train()
         optimizer.zero_grad()
-        y_pred, reg_nll = net(g, g.ndata['feat'])[g.ndata['train_mask']]
+        y_pred, nll_reg = net(g, g.ndata['feat'])
+        y_pred = y_pred[g.ndata['train_mask']]
         y_true = g.ndata['label'][g.ndata['train_mask']]
 
-        loss = torch.nn.functional.nll_loss(y_pred.log_softmax(dim=-1), y_true) + reg_nll
+        loss = torch.nn.functional.nll_loss(y_pred.log_softmax(dim=-1), y_true) + nll_reg
         loss.backward()
         optimizer.step()
         net.eval()
@@ -219,9 +218,7 @@ def run(args):
     np.save(args.out + "/accuracy_vl.npy", accuracy_vl)
     np.save(args.out + "/accuracy_te.npy", accuracy_te)
 
-    # best_epoch = accuracy_vl.argmax()
-    best_epoch = 500
-
+    best_epoch = accuracy_vl.argmax()
     import pandas as pd
     df = pd.DataFrame.from_dict(
         {
@@ -249,5 +246,9 @@ if __name__ == "__main__":
     parser.add_argument("--layer", type=str, default="GraphConv")
     parser.add_argument("--n_epochs", type=int, default=3000)
     parser.add_argument("--report_interval", type=int, default=100)
+    parser.add_argument("--a_prior", type=float, default=1.0)
+    parser.add_argument("--a_log_sigma_init", type=float, default=-1.0)
+    parser.add_argument("--a_mu_init_std", type=float, default=1.0)
+    parser.add_argument("--lr_vi", type=float, default=1e-3)
     args = parser.parse_args()
     run(args)
