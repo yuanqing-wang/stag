@@ -161,7 +161,6 @@ def run(args):
         )
 
         ds = dgl.data.CoraGraphDataset()
-        g = ds[0]
 
     elif args.data == "citeseer":
         net = Net(
@@ -173,8 +172,9 @@ def run(args):
             depth=args.depth,
         )
 
-        ds = dgl.data.CoraGraphDataset()
-        g = ds[0]
+        ds = dgl.data.CiteseerGraphDataset()
+
+    g = ds[0]
 
     if torch.cuda.is_available():
         net = net.to('cuda:0')

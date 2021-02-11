@@ -1,4 +1,11 @@
 import torch
+def stag_copy_src_vi(src="h", out="m"):
+    def message_fun(edges):
+        if "a" in edges.data:
+            return {out: edges.src[src] * edges.data["a"]}
+        return {out: edges.src[src]}
+
+    return message_fun
 
 def stag_copy_src_normal(src='h', out='m', alpha=0.1):
     def message_fun(edges):

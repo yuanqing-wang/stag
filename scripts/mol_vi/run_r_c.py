@@ -3,48 +3,34 @@ import torch
 import dgl
 import stag
 
- 
 class Net(torch.nn.Module):
     def __init__(
-            self, 
-            layer, 
-            in_features, 
-            hidden_features, 
-            out_features, 
-            depth, 
+            self,
+            layer,
+            in_features,
+            hidden_features,
+            out_features,
+            depth,
             activation=None,
             g_ref=None,
         ):
         super(Net, self).__init__()
-        
+
         # get activation function from pytorch if specified
         if activation is not None:
             activation = getattr(torch.nn.functional, activation)
 
-        self.gn0_enc = layer(in_feats=in_features, out_feats=hidden_features, activation=activation)
-        self.gn1_enc = layer(in_feats=hidden_features, out_feats=hidden_features, activation=activation)
-
-        self.f_z_mu = torch.nn.Linear(2*hidden_features, 1)
-        self.f_z_log_sigma = torch.nn.Linear(2*hidden_features, 1)
-
-        torch.nn.init.normal_(self.f_z_log_sigma.weight, std=1e-3)
-        torch.nn.init.constant_(self.f_z_log_sigma.bias, args.a_log_sigma_init)
-       
-        torch.nn.init.normal_(self.f_z_mu.weight, std=1e-2)
-        torch.nn.init.normal_(self.f_z_mu.bias, mean=1.0, std=args.a_mu_init_std)
-
-
         # initial layer: in -> hidden
         self.gn0 = layer(
-            in_feats=in_features, 
+            in_feats=in_features,
             out_feats=hidden_features,
             activation=activation,
         )
 
         # last layer: hidden -> out
         setattr(
-            self, 
-            "gn%s" % (depth-1), 
+            self,
+            "gn%s" % (depth-1),
             layer(
                 in_feats=hidden_features,
                 out_feats=hidden_features,
@@ -71,6 +57,36 @@ class Net(torch.nn.Module):
 
         self.depth = depth
 
+        # assert g_ref is not None
+        self.a_prior = torch.distributions.Normal(1.0, args.a_prior)
+
+        # middle layers
+        self.a_mu = torch.nn.Parameter(
+            torch.distributions.Normal(1, args.a_mu_init_std).sample(
+                (depth-1, hidden_features)
+            )
+        )
+
+        self.a_log_sigma = torch.nn.Parameter(
+            args.a_log_sigma_init * torch.ones(depth-1, hidden_features)
+        )
+
+        # first layer
+        self.a_mu_first = torch.nn.Parameter(
+            torch.distributions.Normal(1, args.a_mu_init_std).sample(
+                [in_features]
+            )
+        )
+
+        self.a_log_sigma_first = torch.nn.Parameter(
+            args.a_log_sigma_init * torch.ones(in_features)
+        )
+
+
+        self.in_features = in_features
+        self.hidden_features = hidden_features
+
+
         self.d = torch.nn.Sequential(
             torch.nn.ReLU(),
             torch.nn.Linear(hidden_features, hidden_features),
@@ -78,54 +94,6 @@ class Net(torch.nn.Module):
             torch.nn.Linear(hidden_features, out_features),
         )
 
-        self.a_prior = torch.distributions.Normal(1.0, args.a_prior)
-
-        self.in_features = in_features
-        self.hidden_features = hidden_features
-
-    def forward(self, g, x):
-        # ensure local scope
-        g = g.local_var()
-        
-        z_node = self.gn0_enc(g, x)
-        z_node = self.gn1_enc(g, z_node)
-        g.ndata["z_node"] = z_node
-
-        g.apply_edges(
-            lambda edges: {
-                "a_first": torch.distributions.Normal(
-                    self.f_z_mu(torch.cat([edges.src["z_node"], edges.dst["z_node"]], dim=-1)),
-                    self.f_z_log_sigma(torch.cat([edges.src["z_node"], edges.dst["z_node"]], dim=-1)).exp()
-                ).rsample([self.in_features]).squeeze().transpose(1, 0),
-                "a_rest": torch.distributions.Normal(
-                    self.f_z_mu(torch.cat([edges.src["z_node"], edges.dst["z_node"]], dim=-1)),
-                    self.f_z_log_sigma(torch.cat([edges.src["z_node"], edges.dst["z_node"]], dim=-1)).exp()
-                ).rsample([self.hidden_features]).squeeze().transpose(1, 0),
-            }
-        )
-
-        nll_reg = -self.a_prior.log_prob(g.edata["a_first"]).mean() - self.a_prior.log_prob(g.edata["a_rest"]).mean()
-
-        g.edata["a"] = g.edata["a_first"]
-        x = self.gn0(g, x)
-
-        for idx in range(1, self.depth):
-            g.edata["a"] = g.edata["a_rest"]
-            x = getattr(self, "gn%s" % idx)(g, x)
-        
-        g.ndata['x'] = x
-        x = dgl.sum_nodes(g, "x")
-        x = self.d(x)
-
-        return x, nll_reg
-
-def stag_copy_src_vi(src="h", out="m"):
-    def message_fun(edges):
-        if "a" in edges.data:
-            return {out: edges.src[src] * edges.data["a"]}
-        return {out: edges.src[src]}
-
-    return message_fun
 
 
 def rmse(y_pred, y_true):
@@ -137,7 +105,7 @@ def run(args):
     from dgllife.data import ESOL, Lipophilicity, FreeSolv
     from dgllife.utils import smiles_to_bigraph, CanonicalAtomFeaturizer
 
-    dgl.function.copy_src = dgl.function.copy_u = stag_copy_src_vi 
+    dgl.function.copy_src = dgl.function.copy_u = stag.stag_copy_src_vi
 
     if args.data == "ESOL":
         ds = ESOL(smiles_to_bigraph, CanonicalAtomFeaturizer())
@@ -163,7 +131,7 @@ def run(args):
     y_tr = torch.stack(y_tr)
     y_te = torch.stack(y_te)
     y_vl = torch.stack(y_vl)
-  
+
     import functools
     layer = functools.partial(
             getattr(dgl_nn, args.layer),
@@ -247,7 +215,7 @@ def run(args):
     np.save(args.out + "/accuracy_tr.npy", accuracy_tr)
     np.save(args.out + "/accuracy_vl.npy", accuracy_vl)
     np.save(args.out + "/accuracy_te.npy", accuracy_te)
-    
+
     best_epoch = accuracy_vl.argmin()
 
     import pandas as pd
