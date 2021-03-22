@@ -2,34 +2,34 @@ import numpy as np
 import torch
 import dgl
 import stag
-        
+
 class Net(torch.nn.Module):
     def __init__(
-            self, 
-            layer, 
-            in_features, 
-            hidden_features, 
-            out_features, 
-            depth, 
+            self,
+            layer,
+            in_features,
+            hidden_features,
+            out_features,
+            depth,
             activation=None
         ):
         super(Net, self).__init__()
-        
+
         # get activation function from pytorch if specified
         if activation is not None:
             activation = getattr(torch.nn.functional, activation)
 
         # initial layer: in -> hidden
         self.gn0 = layer(
-            in_feats=in_features, 
+            in_feats=in_features,
             out_feats=hidden_features,
             activation=activation,
         )
 
         # last layer: hidden -> out
         setattr(
-            self, 
-            "gn%s" % (depth-1), 
+            self,
+            "gn%s" % (depth-1),
             layer(
                 in_feats=hidden_features,
                 out_feats=out_features,
@@ -55,7 +55,7 @@ class Net(torch.nn.Module):
             )
 
         self.depth = depth
-        
+
     def forward(self, g, x):
         # ensure local scope
         g = g.local_var()
@@ -65,7 +65,7 @@ class Net(torch.nn.Module):
 
         for idx in range(1, self.depth-1):
             x = getattr(self, "gn%s" % idx)(g, x)
-        
+
         if self.depth > 1:
             x = getattr(self, "gn%s" % (self.depth-1))(g, x)
             # x = torch.nn.Dropout(0.5)(x)
@@ -77,15 +77,7 @@ def accuracy_between(y_pred, y_true):
         y_pred = y_pred.argmax(dim=-1)
     return (y_pred == y_true).sum() / y_pred.shape[0]
 
-def sampling_performance(g, net, n_samples=16):
-    y_pred = torch.stack([net(g, g.ndata['feat']).detach() for _ in range(n_samples)], dim=0).mean(dim=0)
-    y_true = g.ndata['label']
 
-    _accuracy_tr = accuracy_between(y_pred[g.ndata['train_mask']], y_true[g.ndata['train_mask']]).item()
-    _accuracy_te = accuracy_between(y_pred[g.ndata['test_mask']], y_true[g.ndata['test_mask']]).item()
-    _accuracy_vl = accuracy_between(y_pred[g.ndata['val_mask']], y_true[g.ndata['val_mask']]).item()
-
-    return _accuracy_tr, _accuracy_te, _accuracy_vl
 
 def run(args):
     from functools import partial
@@ -99,8 +91,7 @@ def run(args):
             ),
             alpha=args.alpha
         )
-    
- 
+
     elif args.stag == "none_de":
         dgl.function.sum = partial(
             getattr(
@@ -118,14 +109,14 @@ def run(args):
             ),
             alpha=args.alpha
         )
-   
+
     elif args.stag == "none_dropout":
         dgl.function.sum = partial(
             stag.stag_sum_dropout,
             alpha=args.alpha
         )
-    
-   
+
+
     if args.layer == "SAGEConv":
         layer = partial(dgl_nn.SAGEConv, aggregator_type="mean")
 
@@ -152,9 +143,31 @@ def run(args):
         layer = getattr(dgl_nn, args.layer)
 
     from ogb.nodeproppred import DglNodePropPredDataset, Evaluator
-    data = DglNodePropPredDataset(name=args.data)
+    evaluator = Evaluator(name='ogbn-arxiv')
+    dataset = DglNodePropPredDataset(name=args.data)
+    split_idx = dataset.get_idx_split()
+    g, labels = dataset[0]
+    feats = g.ndata['feat'].to("cuda:0")
+    labels = labels.to("cuda:0")
+    train_idx = split_idx['train'].to("cuda:0")
+    test_idx = split_idx['test'].to("cuda:0")
+    valid_idx = split_idx['valid'].to("cuda:0")
 
-    
+    g = dgl.to_bidirected(g)
+    g = dgl.add_self_loop(g)
+    g = g.int().to("cuda:0")
+
+    def sampling_performance(g, net, n_samples=16):
+
+        y_pred = torch.stack([net(g, g.ndata['feat']).detach() for _ in range(n_samples)], dim=0).mean(dim=0)
+        y_true = labels
+
+        _accuracy_tr = evaluator.eval({"y_true": y_true[train_idx], "y_pred": y_pred[train_idx]})["acc"]
+        _accuracy_te = evaluator.eval({"y_true": y_true[test_idx], "y_pred": y_pred[test_idx]})["acc"]
+        _accuracy_vl = evaluator.eval({"y_true": y_true[valid_idx], "y_pred": y_pred[valid_idx]})["acc"]
+
+        return _accuracy_tr, _accuracy_te, _accuracy_vl
+
     net = Net(
         layer=layer,
         in_features=500,
@@ -162,26 +175,10 @@ def run(args):
         hidden_features=args.hidden_features,
         activation=args.activation,
         depth=args.depth,
-    )
+    ).to("cuda:0")
 
     import itertools
-    optimizer = torch.optim.Adam(
-        [
-            {"params": net.gn0.parameters(), "lr": args.lr, "weight_decay": 5e-3},
-            {
-                "params": itertools.chain(
-                    *[getattr(net, "gn%s" % idx).parameters() for idx in range(1, args.depth)]
-                ),
-                "lr": args.lr
-            }
-        ]
-
-    )
-    g = ds[0]
-
-    if torch.cuda.is_available():
-        net = net.to('cuda:0')
-        g = g.to('cuda:0')
+    optimizer = torch.optim.Adam(net.parameters(), lr=1e-3)
 
     accuracy_tr = []
     accuracy_te = []
@@ -190,17 +187,14 @@ def run(args):
     for idx_epoch in range(args.n_epochs):
         net.train()
         optimizer.zero_grad()
-        y_pred = net(g, g.ndata['feat'])[g.ndata['train_mask']]
-        y_true = g.ndata['label'][g.ndata['train_mask']]
-
-        loss = torch.nn.functional.nll_loss(y_pred.log_softmax(dim=-1), y_true)
+        out = net(g, feats)[train_idx]
+        loss = torch.nn.functional.nll_loss(out, labels.squeeze(1)[train_idx])
         loss.backward()
         optimizer.step()
         net.eval()
         if idx_epoch % args.report_interval == 0:
             _accuracy_tr, _accuracy_te, _accuracy_vl = sampling_performance(g, net, n_samples=32)
-        
-        
+
         accuracy_tr.append(_accuracy_tr)
         accuracy_te.append(_accuracy_te)
         accuracy_vl.append(_accuracy_vl)
@@ -228,7 +222,7 @@ def run(args):
     df.to_markdown(open(args.out + "/overview.md", "w"))
 
     torch.save(net.to('cpu'), args.out + "/net.th")
-        
+
 
 if __name__ == "__main__":
     import argparse
