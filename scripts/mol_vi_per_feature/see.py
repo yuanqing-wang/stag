@@ -33,6 +33,7 @@ if __name__ == "__main__":
     import sys
     name = sys.argv[1]
     mean, std, mean_vl, std_vl = get_trajs(name)
+    print(name)
     print("%.4f ± %.4f" % (mean, std), "%.4f ± %.4f" % (mean_vl, std_vl))
 
 
