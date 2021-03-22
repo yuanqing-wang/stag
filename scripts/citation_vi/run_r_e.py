@@ -2,34 +2,48 @@ import numpy as np
 import torch
 import dgl
 import stag
-        
+
 class Net(torch.nn.Module):
     def __init__(
-            self, 
-            layer, 
-            in_features, 
-            hidden_features, 
-            out_features, 
-            depth, 
-            activation=None
+            self,
+            layer,
+            in_features,
+            hidden_features,
+            out_features,
+            depth,
+            activation=None,
+            g_ref=None,
         ):
         super(Net, self).__init__()
-        
+
         # get activation function from pytorch if specified
         if activation is not None:
             activation = getattr(torch.nn.functional, activation)
 
+        self.gn0_enc = layer(in_feats=in_features, out_feats=hidden_features, activation=activation)
+        self.gn1_enc = layer(in_feats=hidden_features, out_feats=hidden_features, activation=activation)
+
+        self.f_z_mu = torch.nn.Linear(2*hidden_features, 1)
+        self.f_z_log_sigma = torch.nn.Linear(2*hidden_features, 1)
+
+        torch.nn.init.normal_(self.f_z_log_sigma.weight, std=1e-3)
+        torch.nn.init.constant_(self.f_z_log_sigma.bias, args.a_log_sigma_init)
+
+        torch.nn.init.normal_(self.f_z_mu.weight, std=1e-2)
+        torch.nn.init.normal_(self.f_z_mu.bias, mean=1.0, std=args.a_mu_init_std)
+
+
         # initial layer: in -> hidden
         self.gn0 = layer(
-            in_feats=in_features, 
+            in_feats=in_features,
             out_feats=hidden_features,
             activation=activation,
         )
 
         # last layer: hidden -> out
         setattr(
-            self, 
-            "gn%s" % (depth-1), 
+            self,
+            "gn%s" % (depth-1),
             layer(
                 in_feats=hidden_features,
                 out_feats=out_features,
@@ -55,22 +69,44 @@ class Net(torch.nn.Module):
             )
 
         self.depth = depth
-        
+
+        assert g_ref is not None
+        self.a_prior = torch.distributions.Normal(1.0, args.a_prior)
+        self.hidden_features = hidden_features
+        self.in_features = in_features
+
     def forward(self, g, x):
         # ensure local scope
         g = g.local_var()
 
+        z_node = self.gn0_enc(g, x)
+        z_node = self.gn1_enc(g, z_node)
+        g.ndata["z_node"] = z_node
+
+        g.apply_edges(
+            lambda edges: {
+                "a_first": torch.distributions.Normal(
+                    self.f_z_mu(torch.cat([edges.src["z_node"], edges.dst["z_node"]], dim=-1)),
+                    self.f_z_log_sigma(torch.cat([edges.src["z_node"], edges.dst["z_node"]], dim=-1)).exp()
+                ).rsample([self.in_features]).squeeze().transpose(1, 0),
+                "a_rest": torch.distributions.Normal(
+                    self.f_z_mu(torch.cat([edges.src["z_node"], edges.dst["z_node"]], dim=-1)),
+                    self.f_z_log_sigma(torch.cat([edges.src["z_node"], edges.dst["z_node"]], dim=-1)).exp()
+                ).rsample([self.hidden_features]).squeeze().transpose(1, 0),
+            }
+        )
+
+        nll_reg = -self.a_prior.log_prob(g.edata["a_first"]).mean() - self.a_prior.log_prob(g.edata["a_rest"]).mean()
+
+        g.edata["a"] = g.edata["a_first"]
         x = self.gn0(g, x)
-        # x = torch.nn.Dropout(0.5)(x)
 
-        for idx in range(1, self.depth-1):
+        for idx in range(1, self.depth):
+            g.edata["a"] = g.edata["a_rest"]
             x = getattr(self, "gn%s" % idx)(g, x)
-        
-        if self.depth > 1:
-            x = getattr(self, "gn%s" % (self.depth-1))(g, x)
-            # x = torch.nn.Dropout(0.5)(x)
 
-        return x
+        return x, nll_reg
+
 
 def accuracy_between(y_pred, y_true):
     if y_pred.dim() >= 2:
@@ -78,7 +114,7 @@ def accuracy_between(y_pred, y_true):
     return (y_pred == y_true).sum() / y_pred.shape[0]
 
 def sampling_performance(g, net, n_samples=16):
-    y_pred = torch.stack([net(g, g.ndata['feat']).detach() for _ in range(n_samples)], dim=0).mean(dim=0)
+    y_pred = torch.stack([net(g, g.ndata['feat'])[0].detach() for _ in range(n_samples)], dim=0).mean(dim=0)
     y_true = g.ndata['label']
 
     _accuracy_tr = accuracy_between(y_pred[g.ndata['train_mask']], y_true[g.ndata['train_mask']]).item()
@@ -91,68 +127,39 @@ def run(args):
     from functools import partial
     from dgl.nn import pytorch as dgl_nn
 
-    if args.stag != "none":
-        dgl.function.copy_src = dgl.function.copy_u = partial(
-            getattr(
-                stag,
-                "stag_copy_src_%s_shared" % args.stag
-            ),
-            alpha=args.alpha
-        )
-    
-    if args.layer == "SAGEConv":
-        layer = partial(dgl_nn.SAGEConv, aggregator_type="mean")
+    dgl.function.copy_src = dgl.function.copy_u = stag.stag_copy_src_vi
+    layer = getattr(dgl_nn, args.layer)
 
-    elif args.layer == "GINConv":
-        class Layer(torch.nn.Module):
-            def __init__(self, in_feats, out_feats, activation):
-                super(Layer, self).__init__()
-                if activation == None:
-                    activation = lambda x: x
-                self.d0 = torch.nn.Linear(in_feats, in_feats)
-                self.activation = activation
-                self.d1 = torch.nn.Linear(in_feats, out_feats)
-
-            def forward(self, x):
-                x = self.d0(x)
-                x = self.activation(x)
-                x = self.d1(x)
-                x = self.activation(x)
-                return x
-
-        layer = lambda in_feats, out_feats, activation: dgl_nn.GINConv(
-            apply_func=Layer(in_feats, out_feats, activation=activation),
-            aggregator_type="sum",
+    if args.data == "cora":
+        ds = dgl.data.CoraGraphDataset()
+        g = ds[0]
+        net = Net(
+            layer=layer,
+            in_features=1433,
+            out_features=7,
+            hidden_features=args.hidden_features,
+            activation=args.activation,
+            depth=args.depth,
+            g_ref=g
         )
 
-    else:
-        layer = getattr(dgl_nn, args.layer)
 
+    elif args.data == "citeseer":
+        ds = dgl.data.CiteseerGraphDataset()
+        g = ds[0]
+        net = Net(
+            layer=layer,
+            in_features=3703,
+            out_features=6,
+            hidden_features=args.hidden_features,
+            activation=args.activation,
+            depth=args.depth,
+            g_ref=g
+        )
 
-    net = Net(
-        layer=layer,
-        in_features=1433,
-        out_features=7,
-        hidden_features=args.hidden_features,
-        activation=args.activation,
-        depth=args.depth,
-    )
 
     import itertools
-    optimizer = torch.optim.Adam(
-        [
-            {"params": net.gn0.parameters(), "lr": args.lr, "weight_decay": 5e-3},
-            {
-                "params": itertools.chain(
-                    *[getattr(net, "gn%s" % idx).parameters() for idx in range(1, args.depth)]
-                ),
-                "lr": args.lr
-            }
-        ]
-
-    )
-    ds = dgl.data.CoraGraphDataset()
-    g = ds[0]
+    optimizer = torch.optim.Adam(net.parameters(), 1e-3)
 
     if torch.cuda.is_available():
         net = net.to('cuda:0')
@@ -162,20 +169,22 @@ def run(args):
     accuracy_te = []
     accuracy_vl = []
 
+
     for idx_epoch in range(args.n_epochs):
         net.train()
         optimizer.zero_grad()
-        y_pred = net(g, g.ndata['feat'])[g.ndata['train_mask']]
+        y_pred, nll_reg = net(g, g.ndata['feat'])
+        y_pred = y_pred[g.ndata['train_mask']]
         y_true = g.ndata['label'][g.ndata['train_mask']]
 
-        loss = torch.nn.functional.nll_loss(y_pred.log_softmax(dim=-1), y_true)
+        loss = torch.nn.functional.nll_loss(y_pred.log_softmax(dim=-1), y_true) + nll_reg
         loss.backward()
         optimizer.step()
         net.eval()
         if idx_epoch % args.report_interval == 0:
             _accuracy_tr, _accuracy_te, _accuracy_vl = sampling_performance(g, net, n_samples=32)
-        
-        
+
+
         accuracy_tr.append(_accuracy_tr)
         accuracy_te.append(_accuracy_te)
         accuracy_vl.append(_accuracy_vl)
@@ -202,8 +211,6 @@ def run(args):
 
     df.to_markdown(open(args.out + "/overview.md", "w"))
 
-    torch.save(net.to('cpu'), args.out + "/net.th")
-        
 
 if __name__ == "__main__":
     import argparse
@@ -218,5 +225,9 @@ if __name__ == "__main__":
     parser.add_argument("--layer", type=str, default="GraphConv")
     parser.add_argument("--n_epochs", type=int, default=3000)
     parser.add_argument("--report_interval", type=int, default=100)
+    parser.add_argument("--a_prior", type=float, default=1.0)
+    parser.add_argument("--a_log_sigma_init", type=float, default=-1.0)
+    parser.add_argument("--a_mu_init_std", type=float, default=1.0)
+    parser.add_argument("--lr_vi", type=float, default=1e-3)
     args = parser.parse_args()
     run(args)
