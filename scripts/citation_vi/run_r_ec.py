@@ -2,35 +2,54 @@ import numpy as np
 import torch
 import dgl
 import stag
-        
+
 class Net(torch.nn.Module):
     def __init__(
-            self, 
-            layer, 
-            in_features, 
-            hidden_features, 
-            out_features, 
-            depth, 
+            self,
+            layer,
+            in_features,
+            hidden_features,
+            out_features,
+            depth,
             activation=None,
             g_ref=None,
         ):
         super(Net, self).__init__()
-        
+
         # get activation function from pytorch if specified
         if activation is not None:
             activation = getattr(torch.nn.functional, activation)
 
+        self.gn0_enc = layer(in_feats=in_features, out_feats=hidden_features, activation=activation)
+        self.gn1_enc = layer(in_feats=hidden_features, out_feats=hidden_features, activation=activation)
+
+        self.f_z_mu = torch.nn.Linear(2*hidden_features, hidden_features)
+        self.f_z_log_sigma = torch.nn.Linear(2*hidden_features, hidden_features)
+        self.f_z_mu_first = torch.nn.Linear(2*hidden_features, in_features)
+        self.f_z_log_sigma_first = torch.nn.Linear(2*hidden_features, in_features)
+
+        torch.nn.init.normal_(self.f_z_log_sigma.weight, std=1e-3)
+        torch.nn.init.constant_(self.f_z_log_sigma.bias, args.a_log_sigma_init)
+        torch.nn.init.normal_(self.f_z_log_sigma_first.weight, std=1e-3)
+        torch.nn.init.constant(self.f_z_log_sigma_first.bias, args.a_log_sigma_init)
+
+        torch.nn.init.normal_(self.f_z_mu.weight, std=1e-2)
+        torch.nn.init.normal_(self.f_z_mu.bias, mean=1.0, std=args.a_mu_init_std)
+        torch.nn.init.normal_(self.f_z_mu_first.weight, std=1e-2)
+        torch.nn.init.normal_(self.f_z_mu_first.bias, mean=1.0, std=args.a_mu_init_std)
+
+
         # initial layer: in -> hidden
         self.gn0 = layer(
-            in_feats=in_features, 
+            in_feats=in_features,
             out_feats=hidden_features,
             activation=activation,
         )
 
         # last layer: hidden -> out
         setattr(
-            self, 
-            "gn%s" % (depth-1), 
+            self,
+            "gn%s" % (depth-1),
             layer(
                 in_feats=hidden_features,
                 out_feats=out_features,
@@ -56,64 +75,38 @@ class Net(torch.nn.Module):
             )
 
         self.depth = depth
-        
+
         assert g_ref is not None
         self.a_prior = torch.distributions.Normal(1.0, args.a_prior)
-
-        # middle layers 
-        self.a_mu = torch.nn.Parameter(
-            torch.distributions.Normal(1, args.a_mu_init_std).sample(
-                (depth-1, hidden_features)
-            )
-        )
-
-        self.a_log_sigma = torch.nn.Parameter(
-            args.a_log_sigma_init * torch.ones(depth-1, hidden_features)
-        )
-
-        # first layer
-        self.a_mu_first = torch.nn.Parameter(
-            torch.distributions.Normal(1, args.a_mu_init_std).sample(
-                [in_features]
-            )
-        )
-
-        self.a_log_sigma_first = torch.nn.Parameter(
-            args.a_log_sigma_init * torch.ones(in_features)
-        )
-
-        '''
-        # last layer
-        self.a_mu_last = torch.nn.Parameter(
-            torch.distributions.Normal(1, args.a_mu_init_std).sample(
-                [out_features]
-            )
-        )
-
-        self.a_log_sigma_last = torch.nn.Parameter(
-            args.a_log_sigma_init * torch.ones(out_features)
-        )
-        '''
-
-    def condition(self):
-        a_dist = torch.distributions.Normal(self.a_mu, self.a_log_sigma.exp())
-        a_dist_first = torch.distributions.Normal(self.a_mu_first, self.a_log_sigma_first.exp())
-        return a_dist, a_dist_first
 
     def forward(self, g, x):
         # ensure local scope
         g = g.local_var()
 
-        a_dist, a_dist_first = self.condition()
-        a, a_first = a_dist.rsample([g.number_of_edges()]), a_dist_first.rsample([g.number_of_edges()])
+        z_node = self.gn0_enc(g, x)
+        z_node = self.gn1_enc(g, z_node)
+        g.ndata["z_node"] = z_node
 
-        nll_reg = -self.a_prior.log_prob(a).mean() - self.a_prior.log_prob(a_first).mean()
+        g.apply_edges(
+            lambda edges: {
+                "a_first": torch.distributions.Normal(
+                    self.f_z_mu_first(torch.cat([edges.src["z_node"], edges.dst["z_node"]], dim=-1)),
+                    self.f_z_log_sigma_first(torch.cat([edges.src["z_node"], edges.dst["z_node"]], dim=-1)).exp()
+                ).rsample(),
+                "a_rest": torch.distributions.Normal(
+                    self.f_z_mu(torch.cat([edges.src["z_node"], edges.dst["z_node"]], dim=-1)),
+                    self.f_z_log_sigma(torch.cat([edges.src["z_node"], edges.dst["z_node"]], dim=-1)).exp()
+                ).rsample()
+            }
+        )
 
-        g.edata["a"] = a_first
+        nll_reg = -self.a_prior.log_prob(g.edata["a_first"]).mean() - self.a_prior.log_prob(g.edata["a_rest"]).mean()
+
+        g.edata["a"] = g.edata["a_first"]
         x = self.gn0(g, x)
 
         for idx in range(1, self.depth):
-            g.edata["a"] = a[:, idx-1, :]
+            g.edata["a"] = g.edata["a_rest"]
             x = getattr(self, "gn%s" % idx)(g, x)
 
         return x, nll_reg
@@ -136,51 +129,41 @@ def sampling_performance(g, net, n_samples=16):
 def run(args):
     from functools import partial
     from dgl.nn import pytorch as dgl_nn
-    
-    def stag_copy_src_vi(src="h", out="m"):
-        def message_fun(edges):
-            if "a" in edges.data:
-                return {out: edges.src[src] * edges.data["a"]}
-            return {out: edges.src[src]}
 
-        return message_fun
-
-    dgl.function.copy_src = dgl.function.copy_u = stag_copy_src_vi 
-    
-    ds = dgl.data.CoraGraphDataset()
-    g = ds[0]
+    dgl.function.copy_src = dgl.function.copy_u = stag.stag_copy_src_vi
     layer = getattr(dgl_nn, args.layer)
-    net = Net(
-        layer=layer,
-        in_features=1433,
-        out_features=7,
-        hidden_features=args.hidden_features,
-        activation=args.activation,
-        depth=args.depth,
-        g_ref = g,
-    )
 
-    print(net)
-    
+    if args.data == "cora":
+        ds = dgl.data.CoraGraphDataset()
+        g = ds[0]
+        net = Net(
+            layer=layer,
+            in_features=1433,
+            out_features=7,
+            hidden_features=args.hidden_features,
+            activation=args.activation,
+            depth=args.depth,
+            g_ref=g
+        )
+
+
+    elif args.data == "citeseer":
+        ds = dgl.data.CiteseerGraphDataset()
+        g = ds[0]
+        net = Net(
+            layer=layer,
+            in_features=3703,
+            out_features=6,
+            hidden_features=args.hidden_features,
+            activation=args.activation,
+            depth=args.depth,
+            g_ref=g
+        )
+
+
     import itertools
-    optimizer = torch.optim.Adam(
-        [
-            {"params": net.gn0.parameters(), "lr": args.lr, "weight_decay": 5e-3},
-            {
-                "params": itertools.chain(
-                    *[getattr(net, "gn%s" % idx).parameters() for idx in range(1, args.depth)]
-                ),
-                "lr": args.lr
-            },
-            {
-                "params": [net.a_mu, net.a_log_sigma, net.a_mu_first, net.a_log_sigma_first],
-                "lr": args.lr_vi
-            }
-        ]
-
-    )
-
     optimizer = torch.optim.Adam(net.parameters(), 1e-3)
+
     if torch.cuda.is_available():
         net = net.to('cuda:0')
         g = g.to('cuda:0')
@@ -188,6 +171,7 @@ def run(args):
     accuracy_tr = []
     accuracy_te = []
     accuracy_vl = []
+
 
     for idx_epoch in range(args.n_epochs):
         net.train()
@@ -202,8 +186,8 @@ def run(args):
         net.eval()
         if idx_epoch % args.report_interval == 0:
             _accuracy_tr, _accuracy_te, _accuracy_vl = sampling_performance(g, net, n_samples=32)
-        
-        
+
+
         accuracy_tr.append(_accuracy_tr)
         accuracy_te.append(_accuracy_te)
         accuracy_vl.append(_accuracy_vl)
@@ -230,8 +214,6 @@ def run(args):
 
     df.to_markdown(open(args.out + "/overview.md", "w"))
 
-    torch.save(net.to('cpu'), args.out + "/net.th")
-        
 
 if __name__ == "__main__":
     import argparse
