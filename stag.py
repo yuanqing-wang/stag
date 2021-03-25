@@ -1,4 +1,6 @@
 import torch
+from .dataset import Dataset
+
 def stag_copy_src_vi(src="h", out="m"):
     def message_fun(edges):
         if "a" in edges.data:
@@ -15,8 +17,6 @@ def stag_copy_src_normal(src='h', out='m', alpha=0.1):
             scale=torch.tensor(alpha, device=h.device),
         ).sample(h.shape)
         return {out: (mask * h)}
-        else:
-            return {out: h}
     return message_fun
 
 
