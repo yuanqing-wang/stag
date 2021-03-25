@@ -152,7 +152,8 @@ def run(args):
 
     ds = list(dgl.data.TUDataset(args.data))
     import random
-    random.shuffle(ds, seed=2666)
+    random.seed(2666)
+    random.shuffle(ds)
     n_data = len(ds)
     g, y = zip(*ds)
 
@@ -172,7 +173,7 @@ def run(args):
     net = Net(
         layer=layer,
         in_features=1,
-        out_features=max(y_tr, y_te, y_vl).item(),
+        out_features=max(max(y_tr), max(y_te), max(y_vl)).item(),
         hidden_features=args.hidden_features,
         activation=args.activation,
         depth=args.depth,
