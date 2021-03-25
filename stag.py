@@ -1,4 +1,6 @@
 import torch
+from .dataset import Dataset
+
 def stag_copy_src_vi(src="h", out="m"):
     def message_fun(edges):
         if "a" in edges.data:
