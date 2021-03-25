@@ -15,8 +15,6 @@ def stag_copy_src_normal(src='h', out='m', alpha=0.1):
             scale=torch.tensor(alpha, device=h.device),
         ).sample(h.shape)
         return {out: (mask * h)}
-        else:
-            return {out: h}
     return message_fun
 
 
