@@ -32,7 +32,7 @@ class Net(torch.nn.Module):
             "gn%s" % (depth-1),
             layer(
                 in_feats=hidden_features,
-                out_feats=out_features,
+                out_feats=hidden_features,
                 activation=None,
             )
         )
@@ -54,6 +54,12 @@ class Net(torch.nn.Module):
                 in_feats=in_features, out_feats=out_features, activation=None
             )
 
+        self.d = torch.nn.Sequential(
+            torch.nn.Linear(hidden_features, hidden_features),
+            torch.nn.ReLU(),
+            torch.nn.Linear(hidden_features, out_features),
+        )
+
         self.depth = depth
 
     def forward(self, g, x):
@@ -70,22 +76,11 @@ class Net(torch.nn.Module):
             x = getattr(self, "gn%s" % (self.depth-1))(g, x)
             # x = torch.nn.Dropout(0.5)(x)
 
+        g.ndata["x"] = x
+        x = dgl.readout.sum_nodes(g, "x")
+        x = self.d(x)
+
         return x
-
-def accuracy_between(y_pred, y_true):
-    if y_pred.dim() >= 2:
-        y_pred = y_pred.argmax(dim=-1)
-    return (y_pred == y_true).sum() / y_pred.shape[0]
-
-def sampling_performance(g, net, n_samples=16):
-    y_pred = torch.stack([net(g, g.ndata['feat']).detach() for _ in range(n_samples)], dim=0).mean(dim=0)
-    y_true = g.ndata['label']
-
-    _accuracy_tr = accuracy_between(y_pred[g.ndata['train_mask']], y_true[g.ndata['train_mask']]).item()
-    _accuracy_te = accuracy_between(y_pred[g.ndata['test_mask']], y_true[g.ndata['test_mask']]).item()
-    _accuracy_vl = accuracy_between(y_pred[g.ndata['val_mask']], y_true[g.ndata['val_mask']]).item()
-
-    return _accuracy_tr, _accuracy_te, _accuracy_vl
 
 def run(args):
     from functools import partial
@@ -181,35 +176,62 @@ def run(args):
 
     if torch.cuda.is_available():
         net = net.to('cuda:0')
-        g = g.to('cuda:0')
+        g_tr = g_tr.to('cuda:0')
+        g_te = g_te.to('cuda:0')
+        g_vl = g_vl.to('cuda:0')
+        y_tr = y_tr.to('cuda:0')
+        y_te = y_te.to('cuda:0')
+        y_vl = y_vl.to('cuda:0')
+
+
+    def accuracy(y_true, y_pred):
+        y_true = y_true.argmax(dim=-1, keepdims=True)
+        return torch.count_nonzero(y_true == y_pred) / len(y_true)
+
+    def sampling_performance(net, n_samples=16):
+        _accuracy_tr = accuracy(
+            torch.mean(torch.stack([
+                net(g_tr, g_tr.ndata['h']).softmax(dim=-1)
+                for _ in range(n_samples)
+            ], dim=0), dim=0),
+            y_tr,
+        ).item()
+
+        _accuracy_te = accuracy(
+            torch.mean(torch.stack([
+                net(g_te, g_te.ndata['h']).softmax(dim=-1)
+                for _ in range(n_samples)
+            ], dim=0), dim=0),
+            y_te,
+        ).item()
+
+        _accuracy_vl = accuracy(
+            torch.mean(torch.stack([
+                net(g_vl, g_vl.ndata['h']).softmax(dim=-1)
+                for _ in range(n_samples)
+            ], dim=0), dim=0),
+            y_vl,
+        ).item()
+
+        return _accuracy_tr, _accuracy_te, _accuracy_vl
+
 
     import itertools
-    optimizer = torch.optim.Adam(
-        [
-            {"params": net.gn0.parameters(), "lr": args.lr, "weight_decay": 5e-3},
-            {
-                "params": itertools.chain(
-                    *[getattr(net, "gn%s" % idx).parameters() for idx in range(1, args.depth)]
-                ),
-                "lr": args.lr
-            }
-        ]
-
-    )
+    optimizer = torch.optim.Adam(net.parameters(), 1e-3)
 
     accuracy_tr = []
     accuracy_te = []
     accuracy_vl = []
 
-    for idx_epoch in range(args.n_epochs):
-        net.train()
-        optimizer.zero_grad()
-        y_pred = net(g, g.ndata['feat'])[g.ndata['train_mask']]
-        y_true = g.ndata['label'][g.ndata['train_mask']]
 
-        loss = torch.nn.functional.nll_loss(y_pred.log_softmax(dim=-1), y_true)
+    for idx_epoch in range(args.n_epochs):
+        optimizer.zero_grad()
+        y_pred = net(g_tr, g_tr.ndata['h'])
+        y_true = y_tr
+        loss = torch.nn.MSELoss()(y_pred, y_true)
         loss.backward()
         optimizer.step()
+
         net.eval()
         if idx_epoch % args.report_interval == 0:
             _accuracy_tr, _accuracy_te, _accuracy_vl = sampling_performance(g, net, n_samples=32)
