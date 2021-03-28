@@ -3,6 +3,203 @@ import torch
 import dgl
 import stag
 
+import dgl.nn.pytorch as dglnn
+import torch
+import torch.nn as nn
+from dgl import function as fn
+from dgl._ffi.base import DGLError
+from dgl.nn.pytorch.utils import Identity
+from dgl.ops import edge_softmax
+from dgl.utils import expand_as_pair
+
+class GATConv(nn.Module):
+    def __init__(
+        self,
+        in_feats,
+        out_feats,
+        num_heads=1,
+        feat_drop=0.0,
+        attn_drop=0.0,
+        edge_drop=0.0,
+        negative_slope=0.2,
+        use_attn_dst=False,
+        residual=False,
+        activation=None,
+        allow_zero_in_degree=False,
+        use_symmetric_norm=True,
+    ):
+        super(GATConv, self).__init__()
+        self._num_heads = num_heads
+        self._in_src_feats, self._in_dst_feats = expand_as_pair(in_feats)
+        self._out_feats = out_feats
+        self._allow_zero_in_degree = allow_zero_in_degree
+        self._use_symmetric_norm = use_symmetric_norm
+        if isinstance(in_feats, tuple):
+            self.fc_src = nn.Linear(self._in_src_feats, out_feats * num_heads, bias=False)
+            self.fc_dst = nn.Linear(self._in_dst_feats, out_feats * num_heads, bias=False)
+        else:
+            self.fc = nn.Linear(self._in_src_feats, out_feats * num_heads, bias=False)
+        self.attn_l = nn.Parameter(torch.FloatTensor(size=(1, num_heads, out_feats)))
+        if use_attn_dst:
+            self.attn_r = nn.Parameter(torch.FloatTensor(size=(1, num_heads, out_feats)))
+        else:
+            self.register_buffer("attn_r", None)
+        self.feat_drop = nn.Dropout(feat_drop)
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.edge_drop = edge_drop
+        self.leaky_relu = nn.LeakyReLU(negative_slope)
+        if residual:
+            self.res_fc = nn.Linear(self._in_dst_feats, num_heads * out_feats, bias=False)
+        else:
+            self.register_buffer("res_fc", None)
+        self.reset_parameters()
+        self._activation = activation
+
+    def reset_parameters(self):
+        gain = nn.init.calculate_gain("relu")
+        if hasattr(self, "fc"):
+            nn.init.xavier_normal_(self.fc.weight, gain=gain)
+        else:
+            nn.init.xavier_normal_(self.fc_src.weight, gain=gain)
+            nn.init.xavier_normal_(self.fc_dst.weight, gain=gain)
+        nn.init.xavier_normal_(self.attn_l, gain=gain)
+        if isinstance(self.attn_r, nn.Parameter):
+            nn.init.xavier_normal_(self.attn_r, gain=gain)
+        if isinstance(self.res_fc, nn.Linear):
+            nn.init.xavier_normal_(self.res_fc.weight, gain=gain)
+
+    def set_allow_zero_in_degree(self, set_value):
+        self._allow_zero_in_degree = set_value
+
+    def forward(self, graph, feat):
+        with graph.local_scope():
+            if not self._allow_zero_in_degree:
+                if (graph.in_degrees() == 0).any():
+                    assert False
+
+            if isinstance(feat, tuple):
+                h_src = self.feat_drop(feat[0])
+                h_dst = self.feat_drop(feat[1])
+                if not hasattr(self, "fc_src"):
+                    self.fc_src, self.fc_dst = self.fc, self.fc
+                feat_src, feat_dst = h_src, h_dst
+                feat_src = self.fc_src(h_src).view(-1, self._num_heads, self._out_feats)
+                feat_dst = self.fc_dst(h_dst).view(-1, self._num_heads, self._out_feats)
+            else:
+                h_src = self.feat_drop(feat)
+                feat_src = h_src
+                feat_src = self.fc(h_src).view(-1, self._num_heads, self._out_feats)
+                if graph.is_block:
+                    h_dst = h_src[: graph.number_of_dst_nodes()]
+                    feat_dst = feat_src[: graph.number_of_dst_nodes()]
+                else:
+                    h_dst = h_src
+                    feat_dst = feat_src
+
+            if self._use_symmetric_norm:
+                degs = graph.out_degrees().float().clamp(min=1)
+                norm = torch.pow(degs, -0.5)
+                shp = norm.shape + (1,) * (feat_src.dim() - 1)
+                norm = torch.reshape(norm, shp)
+                feat_src = feat_src * norm
+
+            # NOTE: GAT paper uses "first concatenation then linear projection"
+            # to compute attention scores, while ours is "first projection then
+            # addition", the two approaches are mathematically equivalent:
+            # We decompose the weight vector a mentioned in the paper into
+            # [a_l || a_r], then
+            # a^T [Wh_i || Wh_j] = a_l Wh_i + a_r Wh_j
+            # Our implementation is much efficient because we do not need to
+            # save [Wh_i || Wh_j] on edges, which is not memory-efficient. Plus,
+            # addition could be optimized with DGL's built-in function u_add_v,
+            # which further speeds up computation and saves memory footprint.
+            el = (feat_src * self.attn_l).sum(dim=-1).unsqueeze(-1)
+            graph.srcdata.update({"ft": feat_src, "el": el})
+            # compute edge attention, el and er are a_l Wh_i and a_r Wh_j respectively.
+            if self.attn_r is not None:
+                er = (feat_dst * self.attn_r).sum(dim=-1).unsqueeze(-1)
+                graph.dstdata.update({"er": er})
+                graph.apply_edges(fn.u_add_v("el", "er", "e"))
+            else:
+                graph.apply_edges(fn.copy_u("el", "e"))
+            e = self.leaky_relu(graph.edata.pop("e"))
+
+            if self.training and self.edge_drop > 0:
+                perm = torch.randperm(graph.number_of_edges(), device=e.device)
+                bound = int(graph.number_of_edges() * self.edge_drop)
+                eids = perm[bound:]
+                graph.edata["a"] = torch.zeros_like(e)
+                graph.edata["a"][eids] = self.attn_drop(edge_softmax(graph, e[eids], eids=eids))
+            else:
+                graph.edata["a"] = self.attn_drop(edge_softmax(graph, e))
+
+
+            graph.edata["a"] = torch.distributions.Normal(
+                torch.tensor(1.0, device=graph.edata["a"].device),
+                torch.tensor(args.alpha, device=graph.edata["a"].device),
+            ).rsample(graph.edata["a"].shape) * graph.edata["a"]
+
+            # message passing
+            graph.update_all(fn.u_mul_e("ft", "a", "m"), fn.sum("m", "ft"))
+            rst = graph.dstdata["ft"]
+
+            if self._use_symmetric_norm:
+                degs = graph.in_degrees().float().clamp(min=1)
+                norm = torch.pow(degs, 0.5)
+                shp = norm.shape + (1,) * (feat_dst.dim() - 1)
+                norm = torch.reshape(norm, shp)
+                rst = rst * norm
+
+            # residual
+            if self.res_fc is not None:
+                resval = self.res_fc(h_dst).view(h_dst.shape[0], -1, self._out_feats)
+                rst = rst + resval
+
+            # activation
+            if self._activation is not None:
+                rst = self._activation(rst)
+
+            return rst
+
+import numpy as np
+import torch
+import dgl
+
+class ElementWiseLinear(torch.nn.Module):
+    def __init__(self, size, weight=True, bias=True, inplace=False):
+        super().__init__()
+        if weight:
+            self.weight = torch.nn.Parameter(torch.Tensor(size))
+        else:
+            self.weight = None
+        if bias:
+            self.bias = torch.nn.Parameter(torch.Tensor(size))
+        else:
+            self.bias = None
+        self.inplace = inplace
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        if self.weight is not None:
+            torch.nn.init.ones_(self.weight)
+        if self.bias is not None:
+            torch.nn.init.zeros_(self.bias)
+
+    def forward(self, x):
+        if self.inplace:
+            if self.weight is not None:
+                x.mul_(self.weight)
+            if self.bias is not None:
+                x.add_(self.bias)
+        else:
+            if self.weight is not None:
+                x = x * self.weight
+            if self.bias is not None:
+                x = x + self.bias
+        return x
+
+
 class Net(torch.nn.Module):
     def __init__(
             self,
@@ -19,10 +216,15 @@ class Net(torch.nn.Module):
         if activation is not None:
             activation = getattr(torch.nn.functional, activation)
 
+        self.activation = activation
+
+        _hidden_features = int(hidden_features / 1)
+
+
         # initial layer: in -> hidden
         self.gn0 = layer(
             in_feats=in_features,
-            out_feats=hidden_features,
+            out_feats=_hidden_features,
         )
 
         self.bn0 = torch.nn.BatchNorm1d(hidden_features)
@@ -34,7 +236,6 @@ class Net(torch.nn.Module):
             layer(
                 in_feats=hidden_features,
                 out_feats=out_features,
-                activation=None,
             )
         )
 
@@ -45,8 +246,7 @@ class Net(torch.nn.Module):
                 "gn%s" % idx,
                 layer(
                     in_feats=hidden_features,
-                    out_feats=hidden_features,
-                    activation=activation
+                    out_feats=_hidden_features,
                 )
             )
 
@@ -56,37 +256,34 @@ class Net(torch.nn.Module):
                 torch.nn.BatchNorm1d(hidden_features),
             )
 
-        if depth == 1:
-            self.gn0 = layer(
-                in_feats=in_features, out_feats=out_features, activation=None
-            )
+        self.bias_last = ElementWiseLinear(out_features, weight=False, bias=True, inplace=True)
 
         self.depth = depth
-        self.activation = activation
 
     def forward(self, g, x):
         # ensure local scope
         g = g.local_var()
         x = self.gn0(g, x)
-        # x = self.bn0(x)
+        x = x.flatten(1)
+        x = self.bn0(x)
         x = self.activation(x)
-        # x = torch.nn.Dropout(0.5)(x)
+
 
         for idx in range(1, self.depth-1):
-            print(x.shape)
-            x = x.flatten(1)
             x = getattr(self, "gn%s" % idx)(g, x)
-
-            if idx != self.depth-1:
-                # x = getattr(self, "bn%s" % idx)(x)
-                x = self.activation(x)
-                # x = torch.nn.Dropout(0.5)(x)
+            x = x.flatten(1)
+            x = getattr(self, "bn%s" % idx)(x)
+            x = self.activation(x)
 
         if self.depth > 1:
             x = getattr(self, "gn%s" % (self.depth-1))(g, x)
-            x = x.mean(1)
+            x = x.mean(dim=1)
+
+        x = self.bias_last(x)
 
         return x
+
+
 
 def accuracy_between(y_pred, y_true):
     if y_pred.dim() >= 2:
@@ -148,7 +345,7 @@ def run(args):
 
         y_pred = torch.stack([net(g, feats).detach().softmax(dim=-1) for _ in range(n_samples)], dim=0).mean(dim=0).argmax(dim=-1, keepdim=True)
         y_true = labels
-        
+
         _accuracy_tr = evaluator.eval({"y_true": y_true[train_idx], "y_pred": y_pred[train_idx]})["acc"]
         _accuracy_te = evaluator.eval({"y_true": y_true[test_idx], "y_pred": y_pred[test_idx]})["acc"]
         _accuracy_vl = evaluator.eval({"y_true": y_true[valid_idx], "y_pred": y_pred[valid_idx]})["acc"]
@@ -158,7 +355,7 @@ def run(args):
     import functools
     layer = functools.partial(
             dgl.nn.GATConv,
-            num_heads=4
+            num_heads=1
     )
 
     net = Net(
