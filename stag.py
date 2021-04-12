@@ -1,5 +1,6 @@
 import torch
 from .dataset import Dataset
+from .vi import vi
 
 def stag_copy_src_vi(src="h", out="m"):
     def message_fun(edges):
