@@ -82,7 +82,7 @@ class Net(torch.nn.Module):
 
         a_dist = self.condition()
         a = a_dist.rsample([g.number_of_edges(), self.in_features])
-        nll_reg = -2.0 * self.a_prior.log_prob(a).mean()
+        nll_reg = -self.a_prior.log_prob(a).mean()
 
         g.edata["a"] = a
         x = self.gn0(g, x)
@@ -216,5 +216,6 @@ if __name__ == "__main__":
     parser.add_argument("--a_log_sigma_init", type=float, default=-1.0)
     parser.add_argument("--a_mu_init_std", type=float, default=1.0)
     parser.add_argument("--lr_vi", type=float, default=1e-3)
+    parser.add_argument("--data", type=str, default="cora")
     args = parser.parse_args()
     run(args)
