@@ -58,11 +58,6 @@ class StagVIRNodeClassifiction(torch.nn.Module):
                 torch.nn.BatchNorm1d(hidden_features),
             )
 
-        if depth == 1:
-            self.gn0 = layer(
-                in_feats=in_features, out_feats=out_features, activation=None
-            )
-
         self.a_prior = torch.distributions.Normal(1.0, a_prior)
 
         # middle layers
@@ -76,7 +71,7 @@ class StagVIRNodeClassifiction(torch.nn.Module):
         self.hidden_features = hidden_features
         self.depth = depth
         self.kl_scaling = kl_scaling
-
+        self.activation = activation
 
 
     def _forward(self, g, x):
@@ -106,7 +101,7 @@ class StagVIRNodeClassifiction(torch.nn.Module):
                         ).rsample([g.number_of_edges(), self.in_features]),
                 },
                 **{
-                    "a%s" % idx: torch.distribution.Normal(
+                    "a%s" % idx: torch.distributions.Normal(
                         self.a_mu, self.a_log_sigma,
                         ).rsample([g.number_of_edges(), self.hidden_features])
                     for idx in range(1, self.depth)
@@ -117,14 +112,16 @@ class StagVIRNodeClassifiction(torch.nn.Module):
         for idx in range(self.depth):
             g.edata["a"] = g.edata["a%s" % idx]
             x = getattr(self, "gn%s" % idx)(g, x)
-            x = getattr(self, "bn%s" % idx)(x)
-            x = self.activation(x)
+
+            if idx != self.depth - 1:
+                # x = getattr(self, "bn%s" % idx)(x)
+                x = self.activation(x)
 
         g.ndata["x"] = x
         return g, x
 
     @staticmethod
-    def condition(self, x):
+    def condition(x):
         """ Condition (static method. )
 
         Takes a set of parameters and return a distribution.
@@ -162,17 +159,19 @@ class StagVIRNodeClassifiction(torch.nn.Module):
         torch.Tensor : loss
 
         """
+
         # initialize losses
         losses = []
 
         for _ in range(n_samples):
+            _x = x
             # get input graph
             # x.shape = (n_graphs, out_features)
-            g, x = self._forward(g, x)
-            x = x[mask]
+            g, _x = self._forward(g, _x)
+            _x = _x[mask]
 
             # posterior distribution
-            p_y_given_x_z = self.condition(x)
+            p_y_given_x_z = self.condition(_x)
 
             # prior
             p_a = self.a_prior
@@ -184,11 +183,11 @@ class StagVIRNodeClassifiction(torch.nn.Module):
             )
 
             # compute elbo
-            elbo = p_y_given_x_z.log_prob(y[mask]).mean()\
+            elbo = p_y_given_x_z.log_prob(y[mask]).sum()\
                 + sum(
                     [
-                        p_a.log_prob(g.nodes["a%idx"] % idx).mean()\
-                        - q_a.log_prob(g.nodes["a%idx" % idx]).mean()
+                        p_a.log_prob(g.edata["a%s" % idx]).sum()\
+                        - q_a.log_prob(g.edata["a%s" % idx]).sum()
                         for idx in range(self.depth)
                     ]
                 )
@@ -215,10 +214,10 @@ class StagVIRNodeClassifiction(torch.nn.Module):
 
         if mask is None:
             x = torch.stack(
-                [self._forward(g, x)[1] for _ in range(n_samples)], dim=0
+                [self._forward(g, x)[1].softmax(dim=-1) for _ in range(n_samples)], dim=0
             ).mean(dim=0)
         else:
             x = torch.stack(
-                [self._forward(g, x)[1][mask] for _ in range(n_samples)], dim=0
+                    [self._forward(g, x)[1][mask].softmax(dim=-1) for _ in range(n_samples)], dim=0
             ).mean(dim=0)
         return x
