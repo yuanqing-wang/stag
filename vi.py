@@ -91,34 +91,34 @@ class StagVIRNodeClassifiction(torch.nn.Module):
             Graph with perturbed weights annotated.
 
         """
-        g = g.local_var()
+        _g = g.local_var()
 
-        g.apply_edges(
+        _g.apply_edges(
             lambda edges: {
                 **{
                     "a0": torch.distributions.Normal(
                         self.a_mu, self.a_log_sigma,
-                        ).rsample([g.number_of_edges(), self.in_features]),
+                        ).rsample([_g.number_of_edges(), self.in_features]),
                 },
                 **{
                     "a%s" % idx: torch.distributions.Normal(
                         self.a_mu, self.a_log_sigma,
-                        ).rsample([g.number_of_edges(), self.hidden_features])
+                        ).rsample([_g.number_of_edges(), self.hidden_features])
                     for idx in range(1, self.depth)
                 }
             }
         )
 
         for idx in range(self.depth):
-            g.edata["a"] = g.edata["a%s" % idx]
+            _g.edata["a"] = _g.edata["a%s" % idx]
             x = getattr(self, "gn%s" % idx)(g, x)
 
             if idx != self.depth - 1:
                 # x = getattr(self, "bn%s" % idx)(x)
                 x = self.activation(x)
 
-        g.ndata["x"] = x
-        return g, x
+        _g.ndata["x"] = x
+        return _g, x
 
     @staticmethod
     def condition(x):
@@ -167,7 +167,7 @@ class StagVIRNodeClassifiction(torch.nn.Module):
             _x = x
             # get input graph
             # x.shape = (n_graphs, out_features)
-            g, _x = self._forward(g, _x)
+            _g, _x = self._forward(g, _x)
             _x = _x[mask]
 
             # posterior distribution
@@ -186,15 +186,15 @@ class StagVIRNodeClassifiction(torch.nn.Module):
             elbo = p_y_given_x_z.log_prob(y[mask]).sum()\
                 + sum(
                     [
-                        p_a.log_prob(g.edata["a%s" % idx]).sum()\
-                        - q_a.log_prob(g.edata["a%s" % idx]).sum()
+                        p_a.log_prob(_g.edata["a%s" % idx]).sum()\
+                        - q_a.log_prob(_g.edata["a%s" % idx]).sum()
                         for idx in range(self.depth)
                     ]
                 )
 
             losses.append(-elbo)
 
-        return sum(losses) / len(losses)
+        return sum(losses) / n_samples
 
     def forward(self, g, x, n_samples=1, mask=None):
         """ Forward pass. (Inference Pass)
@@ -210,14 +210,14 @@ class StagVIRNodeClassifiction(torch.nn.Module):
         n_samples : int
             Number of samples to consider.
         """
-        g = g.local_var()
+        _g = g.local_var()
 
         if mask is None:
             x = torch.stack(
-                [self._forward(g, x)[1].softmax(dim=-1) for _ in range(n_samples)], dim=0
+                [self._forward(_g, x)[1].softmax(dim=-1) for _ in range(n_samples)], dim=0
             ).mean(dim=0)
         else:
             x = torch.stack(
-                    [self._forward(g, x)[1][mask].softmax(dim=-1) for _ in range(n_samples)], dim=0
+                    [self._forward(_g, x)[1][mask].softmax(dim=-1) for _ in range(n_samples)], dim=0
             ).mean(dim=0)
         return x
