@@ -1,7 +1,7 @@
 import torch
 import dgl
 
-class StagVIRNodeClassifiction(torch.nn.Module):
+class StagVI(torch.nn.Module):
     def __init__(
             self,
             layer,
@@ -14,7 +14,7 @@ class StagVIRNodeClassifiction(torch.nn.Module):
             a_log_sigma_init=1.0,
             kl_scaling=1.0,
         ):
-        super(StagVIRNodeClassifiction, self).__init__()
+        super(StagVI, self).__init__()
 
         # get activation function from pytorch if specified
         if activation is not None:
@@ -26,8 +26,6 @@ class StagVIRNodeClassifiction(torch.nn.Module):
             out_feats=hidden_features,
             activation=activation,
         )
-
-        self.bn0 = torch.nn.BatchNorm1d(hidden_features)
 
         # last layer: hidden -> out
         setattr(
@@ -58,70 +56,18 @@ class StagVIRNodeClassifiction(torch.nn.Module):
                 torch.nn.BatchNorm1d(hidden_features),
             )
 
-        self.a_prior = torch.distributions.Normal(1.0, a_prior)
-
-        # middle layers
-        self.a_mu = torch.nn.Parameter(torch.tensor(1.0))
-
-        self.a_log_sigma = torch.nn.Parameter(
-            torch.tensor(a_log_sigma_init)
-        )
+        if depth == 1:
+            self.gn0 = layer(
+                in_feats=in_features, out_feats=out_features, activation=None
+            )
 
         self.in_features = in_features
         self.hidden_features = hidden_features
         self.depth = depth
         self.kl_scaling = kl_scaling
-        self.activation = activation
-
-
-    def _forward(self, g, x):
-        """ Internal forward.
-
-        Parameters
-        ----------
-        g : dgl.DGLGraph
-            Input graph.
-
-        x : torch.Tensor
-            Input features. (n_nodes, in_features)
-
-        Returns
-        -------
-        dgl.DGLGraph
-            Graph with perturbed weights annotated.
-
-        """
-        _g = g.local_var()
-
-        _g.apply_edges(
-            lambda edges: {
-                **{
-                    "a0": torch.distributions.Normal(
-                        self.a_mu, self.a_log_sigma,
-                        ).rsample([_g.number_of_edges(), self.in_features]),
-                },
-                **{
-                    "a%s" % idx: torch.distributions.Normal(
-                        self.a_mu, self.a_log_sigma,
-                        ).rsample([_g.number_of_edges(), self.hidden_features])
-                    for idx in range(1, self.depth)
-                }
-            }
-        )
-
-        for idx in range(self.depth):
-            _g.edata["a"] = _g.edata["a%s" % idx]
-            x = getattr(self, "gn%s" % idx)(g, x)
-
-            if idx != self.depth - 1:
-                # x = getattr(self, "bn%s" % idx)(x)
-                x = self.activation(x)
-
-        _g.ndata["x"] = x
-        return _g, x
 
     @staticmethod
-    def condition(x):
+    def condition(self, x):
         """ Condition (static method. )
 
         Takes a set of parameters and return a distribution.
@@ -159,19 +105,17 @@ class StagVIRNodeClassifiction(torch.nn.Module):
         torch.Tensor : loss
 
         """
-
         # initialize losses
         losses = []
 
         for _ in range(n_samples):
-            _x = x
             # get input graph
             # x.shape = (n_graphs, out_features)
-            _g, _x = self._forward(g, _x)
-            _x = _x[mask]
+            g, x = self._forward(g, x)
+            x = x[mask]
 
             # posterior distribution
-            p_y_given_x_z = self.condition(_x)
+            p_y_given_x_z = self.condition(x)
 
             # prior
             p_a = self.a_prior
@@ -183,18 +127,18 @@ class StagVIRNodeClassifiction(torch.nn.Module):
             )
 
             # compute elbo
-            elbo = p_y_given_x_z.log_prob(y[mask]).sum()\
+            elbo = p_y_given_x_z.log_prob(y[mask]).mean()\
                 + sum(
                     [
-                        p_a.log_prob(_g.edata["a%s" % idx]).sum()\
-                        - q_a.log_prob(_g.edata["a%s" % idx]).sum()
+                        p_a.log_prob(g.nodes["a%idx"] % idx).mean()\
+                        - q_a.log_prob(g.nodes["a%idx" % idx]).mean()
                         for idx in range(self.depth)
                     ]
                 )
 
             losses.append(-elbo)
 
-        return sum(losses) / n_samples
+        return sum(losses) / len(losses)
 
     def forward(self, g, x, n_samples=1, mask=None):
         """ Forward pass. (Inference Pass)
@@ -214,10 +158,78 @@ class StagVIRNodeClassifiction(torch.nn.Module):
 
         if mask is None:
             x = torch.stack(
-                [self._forward(_g, x)[1].softmax(dim=-1) for _ in range(n_samples)], dim=0
+                [self._forward(_g, x)[1] for _ in range(n_samples)], dim=0
             ).mean(dim=0)
         else:
             x = torch.stack(
-                    [self._forward(_g, x)[1][mask].softmax(dim=-1) for _ in range(n_samples)], dim=0
+                [self._forward(_g, x)[1][mask] for _ in range(n_samples)], dim=0
             ).mean(dim=0)
         return x
+
+class StagVI_NodeClassification_R1(StagVI):
+    def __init__(
+            self,
+            layer,
+            in_features,
+            hidden_features,
+            out_features,
+            depth,
+            activation=None,
+            a_prior=1.0,
+            a_log_sigma_init=1.0,
+            kl_scaling=1.0,
+        ):
+        super(StagVI_NodeClassification_R1, self).__init__()
+
+        self.a_prior = torch.distributions.Normal(1.0, a_prior)
+
+        # middle layers
+        self.a_mu = torch.nn.Parameter(torch.tensor(1.0))
+
+        self.a_log_sigma = torch.nn.Parameter(
+            torch.tensor(a_log_sigma_init)
+        )
+
+    def _forward(self, g, x):
+        """ Internal forward.
+
+        Parameters
+        ----------
+        g : dgl.DGLGraph
+            Input graph.
+
+        x : torch.Tensor
+            Input features. (n_nodes, in_features)
+
+        Returns
+        -------
+        dgl.DGLGraph
+            Graph with perturbed weights annotated.
+
+        """
+        _g = g.local_var()
+
+        _g.apply_edges(
+            lambda edges: {
+                **{
+                    "a0": torch.distributions.Normal(
+                        self.a_mu, self.a_log_sigma,
+                        ).rsample([_g.number_of_edges(), self.in_features]),
+                },
+                **{
+                    "a%s" % idx: torch.distribution.Normal(
+                        self.a_mu, self.a_log_sigma,
+                        ).rsample([_g.number_of_edges(), self.hidden_features])
+                    for idx in range(1, self.depth)
+                }
+            }
+        )
+
+        for idx in range(self.depth):
+            _g.edata["a"] = _g.edata["a%s" % idx]
+            x = getattr(self, "gn%s" % idx)(g, x)
+            x = getattr(self, "bn%s" % idx)(x)
+            x = self.activation(x)
+
+        _g.ndata["x"] = x
+        return _g, x
