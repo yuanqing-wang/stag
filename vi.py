@@ -19,6 +19,7 @@ class StagVI(torch.nn.Module):
         # get activation function from pytorch if specified
         if activation is not None:
             activation = getattr(torch.nn.functional, activation)
+        self.activation = activation
 
         # initial layer: in -> hidden
         self.gn0 = layer(
@@ -67,7 +68,7 @@ class StagVI(torch.nn.Module):
         self.kl_scaling = kl_scaling
 
     @staticmethod
-    def condition(self, x):
+    def condition(x):
         """ Condition (static method. )
 
         Takes a set of parameters and return a distribution.
@@ -127,11 +128,11 @@ class StagVI(torch.nn.Module):
             )
 
             # compute elbo
-            elbo = p_y_given_x_z.log_prob(y[mask]).mean()\
+            elbo = p_y_given_x_z.log_prob(y[mask]).sum()\
                 + sum(
                     [
-                        p_a.log_prob(g.nodes["a%idx"] % idx).mean()\
-                        - q_a.log_prob(g.nodes["a%idx" % idx]).mean()
+                        p_a.log_prob(g.edata["a%s" % idx]).sum()\
+                        - q_a.log_prob(g.edata["a%s" % idx]).sum()
                         for idx in range(self.depth)
                     ]
                 )
@@ -179,7 +180,17 @@ class StagVI_NodeClassification_R1(StagVI):
             a_log_sigma_init=1.0,
             kl_scaling=1.0,
         ):
-        super(StagVI_NodeClassification_R1, self).__init__()
+        super(StagVI_NodeClassification_R1, self).__init__(
+            layer=layer,
+            in_features=in_features,
+            hidden_features=hidden_features,
+            out_features=out_features,
+            depth=depth,
+            activation=activation,
+            a_prior=a_prior,
+            a_log_sigma_init=a_log_sigma_init,
+            kl_scaling=kl_scaling,
+        )
 
         self.a_prior = torch.distributions.Normal(1.0, a_prior)
 
@@ -217,7 +228,7 @@ class StagVI_NodeClassification_R1(StagVI):
                         ).rsample([_g.number_of_edges(), self.in_features]),
                 },
                 **{
-                    "a%s" % idx: torch.distribution.Normal(
+                    "a%s" % idx: torch.distributions.Normal(
                         self.a_mu, self.a_log_sigma,
                         ).rsample([_g.number_of_edges(), self.hidden_features])
                     for idx in range(1, self.depth)
@@ -228,7 +239,6 @@ class StagVI_NodeClassification_R1(StagVI):
         for idx in range(self.depth):
             _g.edata["a"] = _g.edata["a%s" % idx]
             x = getattr(self, "gn%s" % idx)(g, x)
-            x = getattr(self, "bn%s" % idx)(x)
             x = self.activation(x)
 
         _g.ndata["x"] = x
