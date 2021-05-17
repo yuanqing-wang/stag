@@ -11,6 +11,7 @@ class StagVI(torch.nn.Module):
             depth,
             activation=None,
             a_prior=1.0,
+            a_mu_init_std=1.0,
             a_log_sigma_init=1.0,
             kl_scaling=1.0,
         ):
@@ -66,7 +67,9 @@ class StagVI(torch.nn.Module):
         self.hidden_features = hidden_features
         self.depth = depth
         self.kl_scaling = kl_scaling
-
+        self.a_prior = torch.distributions.Normal(1.0, a_prior)
+        self.a_mu_init_std = a_mu_init_std
+        self.a_log_sigma_init = a_log_sigma_init
 
     @staticmethod
     def condition(x):
@@ -218,6 +221,96 @@ class StagVI_NodeClassification_R1(StagVI):
                     "a%s" % idx: torch.distributions.Normal(
                         self.a_mu, self.a_log_sigma,
                         ).rsample([_g.number_of_edges(), self.hidden_features])
+                    for idx in range(1, self.depth)
+                }
+            }
+        )
+
+        for idx in range(self.depth):
+            _g.edata["a"] = _g.edata["a%s" % idx]
+            x = getattr(self, "gn%s" % idx)(g, x)
+
+            if idx != self.depth - 1:
+                x = self.activation(x)
+
+        _g.ndata["x"] = x
+        return _g, x
+
+
+class StagVI_NodeClassification_RC(StagVI):
+    def __init__(
+            self,
+            layer,
+            in_features,
+            hidden_features,
+            out_features,
+            depth,
+            activation=None,
+            a_prior=1.0,
+            kl_scaling=1.0,
+            a_mu_init_std=1.0,
+            a_log_sigma_init=0.0,
+        ):
+        super(StagVI_NodeClassification_RC, self).__init__(
+            layer=layer,
+            in_features=in_features,
+            hidden_features=hidden_features,
+            out_features=out_features,
+            depth=depth,
+            activation=activation,
+            a_prior=a_prior,
+            a_log_sigma_init=a_log_sigma_init,
+            kl_scaling=kl_scaling,
+        )
+
+        # middle layers
+        self.a_mu = torch.nn.Parameter(
+            torch.distributions.Normal(1, a_mu_init_std).sample(
+                (depth-1, hidden_features)
+            )
+        )
+
+        self.a_log_sigma = torch.nn.Parameter(
+            a_log_sigma_init * torch.ones(depth-1, hidden_features)
+        )
+
+        # first layer
+        self.a_mu_first = torch.nn.Parameter(
+            torch.distributions.Normal(1, a_mu_init_std).sample(
+                [in_features]
+            )
+        )
+
+        self.a_log_sigma_first = torch.nn.Parameter(
+            a_log_sigma_init * torch.ones(in_features)
+        )
+
+    def _forward(self, g, x):
+        """ Internal forward.
+        Parameters
+        ----------
+        g : dgl.DGLGraph
+            Input graph.
+        x : torch.Tensor
+            Input features. (n_nodes, in_features)
+        Returns
+        -------
+        dgl.DGLGraph
+            Graph with perturbed weights annotated.
+        """
+        _g = g.local_var()
+
+        _g.apply_edges(
+            lambda edges: {
+                **{
+                    "a0": torch.distributions.Normal(
+                        self.a_mu, self.a_log_sigma,
+                        ).rsample([_g.number_of_edges()]),
+                },
+                **{
+                    "a%s" % idx: torch.distributions.Normal(
+                        self.a_mu, self.a_log_sigma,
+                        ).rsample([_g.number_of_edges()])
                     for idx in range(1, self.depth)
                 }
             }
