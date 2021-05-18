@@ -84,6 +84,15 @@ class StagVI(torch.nn.Module):
         """
         return torch.distributions.categorical.Categorical(logits=x)
 
+    def q_a(self, g):
+        return torch.distributions.Normal(
+            loc=self.a_mu,
+            scale=self.a_log_sigma.exp()
+        )
+
+    def q_a_first(self, g):
+        return self.q_a(g)
+
     def loss(self, g, x, y, n_samples=1, mask=None):
         """ Training loss.
         Parameters
@@ -118,14 +127,11 @@ class StagVI(torch.nn.Module):
             p_a = self.a_prior
 
             # variational posterior
-            q_a = torch.distributions.Normal(
-                loc=self.a_mu,
-                scale=self.a_log_sigma.exp()
-            )
+            q_a = self.q_a(_g)
 
             # compute elbo
             elbo = p_y_given_x_z.log_prob(y[mask]).sum()\
-                + sum(
+                + self.kl_scaling * sum(
                     [
                         p_a.log_prob(_g.edata["a%s" % idx]).sum()\
                         - q_a.log_prob(_g.edata["a%s" % idx]).sum()
@@ -304,12 +310,12 @@ class StagVI_NodeClassification_RC(StagVI):
             lambda edges: {
                 **{
                     "a0": torch.distributions.Normal(
-                        self.a_mu, self.a_log_sigma,
+                        self.a_mu_first, self.a_log_sigma_first.exp(),
                         ).rsample([_g.number_of_edges()]),
                 },
                 **{
                     "a%s" % idx: torch.distributions.Normal(
-                        self.a_mu, self.a_log_sigma,
+                        self.a_mu, self.a_log_sigma.exp(),
                         ).rsample([_g.number_of_edges()])
                     for idx in range(1, self.depth)
                 }
@@ -325,6 +331,7 @@ class StagVI_NodeClassification_RC(StagVI):
 
         _g.ndata["x"] = x
         return _g, x
+
 
 class StagVI_NodeClassification_RE(StagVI):
     def __init__(
@@ -352,8 +359,8 @@ class StagVI_NodeClassification_RE(StagVI):
             kl_scaling=kl_scaling,
         )
 
-        self.gn0_enc = layer(in_feats=in_features, out_feats=hidden_features, activation=activation)
-        self.gn1_enc = layer(in_feats=hidden_features, out_feats=hidden_features, activation=activation)
+        self.gn0_enc = layer(in_feats=in_features, out_feats=hidden_features, activation=self.activation)
+        self.gn1_enc = layer(in_feats=hidden_features, out_feats=hidden_features, activation=self.activation)
 
         self.f_z_mu = torch.nn.Linear(2*hidden_features, 1)
         self.f_z_log_sigma = torch.nn.Linear(2*hidden_features, 1)
@@ -364,6 +371,11 @@ class StagVI_NodeClassification_RE(StagVI):
         torch.nn.init.normal_(self.f_z_mu.weight, std=1e-2)
         torch.nn.init.normal_(self.f_z_mu.bias, mean=1.0, std=a_mu_init_std)
 
+    def q_a(self, g):
+        return torch.distributions.Normal(
+            g.edata["mu"], g.edata["sigma"]
+        )
+            
 
     def _forward(self, g, x):
         """ Internal forward.
@@ -380,20 +392,27 @@ class StagVI_NodeClassification_RE(StagVI):
         """
         _g = g.local_var()
 
+        z_node = self.gn0_enc(_g, x)
+        z_node = self.gn1_enc(_g, z_node)
+        _g.ndata["z_node"] = z_node
+
+        _g.apply_edges(lambda edges:{
+            **{
+                "mu": self.f_z_mu(torch.cat([edges.src["z_node"], edges.dst["z_node"]], dim=-1))
+            },
+            **{
+                "sigma": self.f_z_log_sigma(torch.cat([edges.src["z_node"], edges.dst["z_node"]], dim=-1)).exp()
+            },
+        }
+        )
+
         _g.apply_edges(
             lambda edges: {
-                **{
-                    "a0": torch.distributions.Normal(
-                        self.f_z_mu(torch.cat([edges.src["z_node"], edges.dst["z_node"]], dim=-1)),
-                        self.f_z_log_sigma(torch.cat([edges.src["z_node"], edges.dst["z_node"]], dim=-1)).exp()
-                    ).rsample([self.in_features]).squeeze().transpose(1, 0),
-                },
-                **{
-                    "a%s" % idx: torch.distributions.Normal(
-                        self.f_z_mu(torch.cat([edges.src["z_node"], edges.dst["z_node"]], dim=-1)),
-                        self.f_z_log_sigma(torch.cat([edges.src["z_node"], edges.dst["z_node"]], dim=-1)).exp()
-                    ).rsample([self.hidden_features]).squeeze().transpose(1, 0),
-                }
+                "a%s" % idx: torch.distributions.Normal(
+                    loc=edges.data["mu"],
+                    scale=edges.data["sigma"],
+                ).rsample()
+                for idx in range(self.depth)
             }
         )
 
@@ -488,3 +507,4 @@ class StagVI_NodeClassification_REC(StagVI):
 
         _g.ndata["x"] = x
         return _g, x
+
