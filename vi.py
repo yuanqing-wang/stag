@@ -84,14 +84,14 @@ class StagVI(torch.nn.Module):
         """
         return torch.distributions.categorical.Categorical(logits=x)
 
-    def q_a(self, g):
-        return torch.distributions.Normal(
-            loc=self.a_mu,
-            scale=self.a_log_sigma.exp()
-        )
-
-    def q_a_first(self, g):
-        return self.q_a(g)
+    def q_a_array(self, g):
+        return [
+            torch.distributions.Normal(
+                loc=self.a_mu,
+                scale=self.a_log_sigma.exp()
+            )
+            for _ in range(self.depth)
+        ]
 
     def loss(self, g, x, y, n_samples=1, mask=None):
         """ Training loss.
@@ -127,14 +127,14 @@ class StagVI(torch.nn.Module):
             p_a = self.a_prior
 
             # variational posterior
-            q_a = self.q_a(_g)
+            q_a_array = self.q_a_array(_g)
 
             # compute elbo
             elbo = p_y_given_x_z.log_prob(y[mask]).sum()\
                 + self.kl_scaling * sum(
                     [
                         p_a.log_prob(_g.edata["a%s" % idx]).sum()\
-                        - q_a.log_prob(_g.edata["a%s" % idx]).sum()
+                        - q_a_array[idx].log_prob(_g.edata["a%s" % idx]).sum()
                         for idx in range(self.depth)
                     ]
                 )
@@ -269,27 +269,45 @@ class StagVI_NodeClassification_RC(StagVI):
             kl_scaling=kl_scaling,
         )
 
-        # middle layers
-        self.a_mu = torch.nn.Parameter(
-            torch.distributions.Normal(1, a_mu_init_std).sample(
-                (depth-1, hidden_features)
-            )
-        )
-
-        self.a_log_sigma = torch.nn.Parameter(
-            a_log_sigma_init * torch.ones(depth-1, hidden_features)
-        )
-
         # first layer
-        self.a_mu_first = torch.nn.Parameter(
+        self.a_mu_0 = torch.nn.Parameter(
             torch.distributions.Normal(1, a_mu_init_std).sample(
                 [in_features]
             )
         )
 
-        self.a_log_sigma_first = torch.nn.Parameter(
+        self.a_log_sigma_0 = torch.nn.Parameter(
             a_log_sigma_init * torch.ones(in_features)
         )
+
+        for idx in range(1, self.depth):
+            setattr(
+                set,
+                "a_mu_%s" % idx,
+                torch.nn.Parameter(
+                    torch.distributions.Normal(1, a_mu_init_std).sample(
+                        ([hidden_features])
+                    )
+                )
+            )
+
+            setattr(
+                set,
+                "a_log_sigma_%s" % idx,
+                torch.nn.Parameter(
+                    a_log_sigma_init * torch.ones([hidden_features])
+                )
+            )
+
+    def q_a_array(self, g):
+        return [
+            torch.distributions.Normal(
+                loc=getattr(self, "a_mu_%s" % idx),
+                scale=getattr(self, "a_log_sigma_%s" % idx)
+            )
+            for idx in range(self.depth)
+        ]
+
 
     def _forward(self, g, x):
         """ Internal forward.
@@ -308,17 +326,10 @@ class StagVI_NodeClassification_RC(StagVI):
 
         _g.apply_edges(
             lambda edges: {
-                **{
-                    "a0": torch.distributions.Normal(
-                        self.a_mu_first, self.a_log_sigma_first.exp(),
-                        ).rsample([_g.number_of_edges()]),
-                },
-                **{
-                    "a%s" % idx: torch.distributions.Normal(
-                        self.a_mu, self.a_log_sigma.exp(),
-                        ).rsample([_g.number_of_edges()])
-                    for idx in range(1, self.depth)
-                }
+                "a%s" % idx: torch.distributions.Normal(
+                    getattr(self, "a_mu_%s" % idx),
+                    getattr(self, "a_log_sigma_%s" % idx).exp(),
+                ).rsample([_g.number_of_edges()])
             }
         )
 
@@ -375,7 +386,7 @@ class StagVI_NodeClassification_RE(StagVI):
         return torch.distributions.Normal(
             g.edata["mu"], g.edata["sigma"]
         )
-            
+
 
     def _forward(self, g, x):
         """ Internal forward.
@@ -507,4 +518,3 @@ class StagVI_NodeClassification_REC(StagVI):
 
         _g.ndata["x"] = x
         return _g, x
-
