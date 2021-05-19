@@ -28,26 +28,31 @@ def run(args):
     if args.data == "cora":
         ds = dgl.data.CoraGraphDataset()
         g = ds[0]
-        net = stag.vi.StagVI_NodeClassification_R1(
+        net = stag.vi.StagVI_NodeClassification_RC(
             layer=layer,
             in_features=1433,
             out_features=7,
             hidden_features=args.hidden_features,
             activation=args.activation,
             depth=args.depth,
+            kl_scaling=args.kl_scaling,
+            a_prior=args.a_prior,
+            a_mu_init_std=args.a_mu_init_std,
+            a_log_sigma_init=args.a_log_sigma_init,
         )
 
 
     elif args.data == "citeseer":
         ds = dgl.data.CiteseerGraphDataset()
         g = ds[0]
-        net = stag.vi.StagVI_NodeClassification_R1(
+        net = stag.vi.StagVI_NodeClassification_RC(
             layer=layer,
             in_features=3703,
             out_features=6,
             hidden_features=args.hidden_features,
             activation=args.activation,
             depth=args.depth,
+            kl_scaling=args.kl_scaling,
         )
 
     import itertools
@@ -110,7 +115,6 @@ def run(args):
 
     df.to_markdown(open(args.out + "/overview.md", "w"))
 
-
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
@@ -129,5 +133,6 @@ if __name__ == "__main__":
     parser.add_argument("--a_mu_init_std", type=float, default=1.0)
     parser.add_argument("--lr_vi", type=float, default=1e-3)
     parser.add_argument("--data", type=str, default="cora")
+    parser.add_argument("--kl_scaling", type=float, default=1.0)
     args = parser.parse_args()
     run(args)

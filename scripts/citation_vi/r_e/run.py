@@ -28,7 +28,7 @@ def run(args):
     if args.data == "cora":
         ds = dgl.data.CoraGraphDataset()
         g = ds[0]
-        net = stag.vi.StagVI_NodeClassification_R1(
+        net = stag.vi.StagVI_NodeClassification_RE(
             layer=layer,
             in_features=1433,
             out_features=7,
@@ -41,7 +41,7 @@ def run(args):
     elif args.data == "citeseer":
         ds = dgl.data.CiteseerGraphDataset()
         g = ds[0]
-        net = stag.vi.StagVI_NodeClassification_R1(
+        net = stag.vi.StagVI_NodeClassification_RE(
             layer=layer,
             in_features=3703,
             out_features=6,
