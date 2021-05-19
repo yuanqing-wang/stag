@@ -29,6 +29,8 @@ class StagVI(torch.nn.Module):
             activation=activation,
         )
 
+        self.bn0 = torch.nn.BatchNorm1d(hidden_features)
+
         # last layer: hidden -> out
         setattr(
             self,
@@ -70,6 +72,7 @@ class StagVI(torch.nn.Module):
         self.a_prior = torch.distributions.Normal(1.0, a_prior)
         self.a_mu_init_std = a_mu_init_std
         self.a_log_sigma_init = a_log_sigma_init
+
 
     @staticmethod
     def condition(x):
@@ -282,17 +285,17 @@ class StagVI_NodeClassification_RC(StagVI):
 
         for idx in range(1, self.depth):
             setattr(
-                set,
+                self,
                 "a_mu_%s" % idx,
                 torch.nn.Parameter(
                     torch.distributions.Normal(1, a_mu_init_std).sample(
-                        ([hidden_features])
+                        [hidden_features]
                     )
                 )
             )
 
             setattr(
-                set,
+                self,
                 "a_log_sigma_%s" % idx,
                 torch.nn.Parameter(
                     a_log_sigma_init * torch.ones([hidden_features])
@@ -303,7 +306,7 @@ class StagVI_NodeClassification_RC(StagVI):
         return [
             torch.distributions.Normal(
                 loc=getattr(self, "a_mu_%s" % idx),
-                scale=getattr(self, "a_log_sigma_%s" % idx)
+                scale=getattr(self, "a_log_sigma_%s" % idx).exp()
             )
             for idx in range(self.depth)
         ]
@@ -330,14 +333,16 @@ class StagVI_NodeClassification_RC(StagVI):
                     getattr(self, "a_mu_%s" % idx),
                     getattr(self, "a_log_sigma_%s" % idx).exp(),
                 ).rsample([_g.number_of_edges()])
+                for idx in range(self.depth)
             }
         )
 
         for idx in range(self.depth):
             _g.edata["a"] = _g.edata["a%s" % idx]
             x = getattr(self, "gn%s" % idx)(g, x)
-
+            
             if idx != self.depth - 1:
+                # x = getattr(self, "bn%s" % idx)(x)
                 x = self.activation(x)
 
         _g.ndata["x"] = x

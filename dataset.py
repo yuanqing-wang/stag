@@ -55,6 +55,13 @@ class Dataset(torch.utils.data.Dataset):
     def __iter__(self):
         return iter(self.points)
 
+    def shuffle(self, seed=None):
+        import random
+        if seed is not None:
+            random.seed(seed)
+        random.shuffle(self.points)
+        return self
+
     @staticmethod
     def batch_of_g_and_y(points):
         # initialize results
@@ -62,13 +69,9 @@ class Dataset(torch.utils.data.Dataset):
         ys = []
 
         # loop through the points
-        for point in points:
-            if not point.is_featurized():  # featurize
-                point.featurize()
-            if point.y is None:
-                raise RuntimeError("No data associated with data. ")
-            gs.append(point.g)
-            ys.append(point.y)
+        for g, y in points:
+            gs.append(g)
+            ys.append(y)
 
         g = dgl.batch(gs)
         y = torch.tensor(ys)[:, None]
@@ -87,6 +90,10 @@ class Dataset(torch.utils.data.Dataset):
 
         g = dgl.batch(gs)
         return g
+
+    def apply(self, fn):
+        self.points = [fn(point) for point in self.points]
+        return self.points
 
     def view(
         self,
