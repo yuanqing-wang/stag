@@ -85,7 +85,7 @@ class StagVI(torch.nn.Module):
         """
         return torch.distributions.categorical.Categorical(logits=x)
 
-    def q_a_array(self, g):
+    def q_a_array(self, g, edge_subsample=1.0):
         return [
             torch.distributions.Normal(
                 loc=self.a_mu,
