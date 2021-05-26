@@ -110,14 +110,13 @@ class StagVI(torch.nn.Module):
         -------
         torch.Tensor : loss
         """
-        global _g
-        _g = g.local_var()
         # initialize losses
         neg_elbos = []
 
         xs = []
 
         for _ in range(n_samples):
+            _g = g.local_var()
             _g, _x = self._forward(_g, x)
 
             # posterior distribution
@@ -494,24 +493,33 @@ class StagVI_NodeClassification_REC(StagVI):
             setattr(self, "f_z_mu_%s" % idx, torch.nn.Linear(2 * hidden_features, _hidden_features))
             setattr(self, "f_z_log_sigma_%s" % idx, torch.nn.Linear(2 * hidden_features, _hidden_features))
 
-            # torch.nn.init.constant_(
-            #     getattr(self, "f_z_mu_%s" % idx).bias,
-            #     1.0
-            # )
+            torch.nn.init.constant_(
+                getattr(self, "f_z_mu_%s" % idx).bias,
+                1.0
+            )
 
-            # torch.nn.init.constant_(
-            #     getattr(self, "f_z_log_sigma_%s" % idx).bias,
-            #     a_log_sigma_init,
-            # )
+            torch.nn.init.constant_(
+                getattr(self, "f_z_log_sigma_%s" % idx).bias,
+                a_log_sigma_init,
+            )
+
+            torch.nn.init.normal_(
+                getattr(self, "f_z_mu_%s" % idx).weight,
+                mean=0.0, std=1e-3,
+            )
+            torch.nn.init.normal_(
+                getattr(self, "f_z_log_sigma_%s" % idx).weight,
+                mean=0.0, std=1e-3,
+            )
 
         self.a_mean_history = []
         self.a_std_history = []
 
-    def q_a_array(self, g):
+    def q_a_array(self, g, in_edges=None):
         return [
             torch.distributions.Normal(
-                loc=g.edata["mu_%s" % idx],
-                scale=g.edata["sigma_%s" % idx],
+                loc=g.edges[in_edges].data["mu_%s" % idx],
+                scale=g.edges[in_edges].data["sigma_%s" % idx],
             )
             for idx in range(self.depth)
         ]
@@ -564,7 +572,7 @@ class StagVI_NodeClassification_REC(StagVI):
 
         _g.apply_edges(lambda edges:{
             **{
-                "mu_%s" % idx: getattr(self, "f_z_mu_%s" % idx)(torch.cat([edges.src["z_node"], edges.dst["z_node"]], dim=-1)).exp()
+                "mu_%s" % idx: getattr(self, "f_z_mu_%s" % idx)(torch.cat([edges.src["z_node"], edges.dst["z_node"]], dim=-1))
                 for idx in range(self.depth)
             },
             **{
