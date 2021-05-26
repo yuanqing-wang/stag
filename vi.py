@@ -85,7 +85,7 @@ class StagVI(torch.nn.Module):
         """
         return torch.distributions.categorical.Categorical(logits=x)
 
-    def q_a_array(self, g, edge_subsample=1.0):
+    def q_a_array(self, g):
         return [
             torch.distributions.Normal(
                 loc=self.a_mu,
@@ -94,7 +94,7 @@ class StagVI(torch.nn.Module):
             for _ in range(self.depth)
         ]
 
-    def loss(self, g, x, y, n_samples=1, mask=None, edge_subsample=1.0):
+    def loss(self, g, x, y, n_samples=1, mask=None):
         """ Training loss.
         Parameters
         ----------
@@ -110,8 +110,8 @@ class StagVI(torch.nn.Module):
         -------
         torch.Tensor : loss
         """
+        global _g
         _g = g.local_var()
-
         # initialize losses
         neg_elbos = []
 
@@ -129,37 +129,34 @@ class StagVI(torch.nn.Module):
             # variational posterior
             q_a_array = self.q_a_array(_g)
 
+            # compute in_edges
+            in_edges = _g.in_edges(torch.arange(len(mask), device=_g.device)[mask])
 
-            if edge_subsample == 1.0:
-                edge_reg = -sum(
-                    [
-                        p_a.log_prob(_g.edata["a%s" % idx]).sum(dim=-1)
-                        - q_a_array[idx].log_prob(_g.edata["a%s" % idx]).sum(dim=-1)\
-                        for idx in range(self.depth)
-                    ]
-                )
+            # compute edge regularizer
+            _g.apply_edges(
+                lambda edge: {
+                    "reg": -sum(
+                        [
+                            p_a.log_prob(edge.data["a%s" % idx]).sum(dim=-1)
+                            - q_a_array[idx].log_prob(edge.data["a%s" % idx]).sum(dim=-1)\
+                            for idx in range(self.depth)
+                        ]
+                    )
+                },
+                edges=in_edges,
+            )
 
-            else:
-                edge_idxs = range(_g.number_of_edges())
-                import random
-                random.shuffle(edge_idxs)
-                edge_idxs = edge_idxs[:int(edge_subsample*len(edge_idxs))]
+            aggregate_fn = dgl.function.copy_e('reg', 'm_reg')
 
-                edge_reg = -sum(
-                    [
-                        p_a.log_prob(_g.edata["a%s" % idx][edge_idxs]).sum(dim=-1)
-                        - q_a_array[idx].log_prob(_g.edata["a%s" % idx][edge_idxs]).sum(dim=-1)\
-                        for idx in range(self.depth)
-                    ]
-                ) / edge_subsample
+            # mean averages the regularization term
+            _g.update_all(aggregate_fn, dgl.function.mean(msg='m_reg', out='reg'))
 
             neg_elbo_z = -p_y_given_x_z.log_prob(y)[mask].sum()\
-                + self.kl_scaling * edge_reg.sum()
+                + self.kl_scaling * _g.ndata['reg'][mask].sum()
 
             neg_elbos.append(neg_elbo_z)
 
         return sum(neg_elbos) / n_samples
-
 
     def forward(self, g, x, n_samples=1, mask=None):
         """ Forward pass. (Inference Pass)
@@ -182,7 +179,6 @@ class StagVI(torch.nn.Module):
                     [self._forward(_g, x)[1][mask].softmax(dim=-1) for _ in range(n_samples)], dim=0
             ).mean(dim=0)
         return x
-
 
 class StagVI_NodeClassification_R1(StagVI):
     def __init__(
