@@ -3,120 +3,6 @@ import torch
 import dgl
 import stag
 
-class Net(torch.nn.Module):
-    def __init__(
-            self,
-            layer,
-            in_features,
-            hidden_features,
-            out_features,
-            depth,
-            activation=None,
-            g_ref=None,
-        ):
-        super(Net, self).__init__()
-
-        # get activation function from pytorch if specified
-        if activation is not None:
-            activation = getattr(torch.nn.functional, activation)
-
-        # initial layer: in -> hidden
-        self.gn0 = layer(
-            in_feats=in_features,
-            out_feats=hidden_features,
-            activation=activation,
-        )
-
-        # last layer: hidden -> out
-        setattr(
-            self,
-            "gn%s" % (depth-1),
-            layer(
-                in_feats=hidden_features,
-                out_feats=out_features,
-                activation=None,
-            )
-        )
-
-        # middle layers: hidden -> hidden
-        for idx in range(1, depth-1):
-            setattr(
-                self,
-                "gn%s" % idx,
-                layer(
-                    in_feats=hidden_features,
-                    out_feats=hidden_features,
-                    activation=activation
-                )
-            )
-
-        if depth == 1:
-            self.gn0 = layer(
-                in_feats=in_features, out_feats=out_features, activation=None
-            )
-
-        self.depth = depth
-
-        self.a_prior = torch.distributions.Normal(1.0, args.a_prior)
-
-        # middle layers
-        self.a_mu = torch.nn.Parameter(
-            torch.distributions.Normal(1, args.a_mu_init_std).sample(
-                (depth-1, hidden_features)
-            )
-        )
-
-        self.a_log_sigma = torch.nn.Parameter(
-            args.a_log_sigma_init * torch.ones(depth-1, hidden_features)
-        )
-
-        # first layer
-        self.a_mu_first = torch.nn.Parameter(
-            torch.distributions.Normal(1, args.a_mu_init_std).sample(
-                [in_features]
-            )
-        )
-
-        self.a_log_sigma_first = torch.nn.Parameter(
-            args.a_log_sigma_init * torch.ones(in_features)
-        )
-
-        self.in_features = in_features
-
-
-    def forward(self, g, x):
-        # ensure local scope
-        g = g.local_var()
-
-        # z_node = self.gn0_enc(g, x)
-        # z_node = self.gn1_enc(g, z_node)
-        # g.ndata["z_node"] = z_node
-
-        g.apply_edges(
-            lambda edges: {
-                "a_first": torch.distributions.Normal(
-                    self.a_mu_first, self.a_log_sigma_first,
-                    ).rsample([g.number_of_edges()]),
-                "a_rest": torch.distributions.Normal(
-                    self.a_mu, self.a_log_sigma,
-                    ).rsample([g.number_of_edges()]),
-            }
-        )
-
-        nll_reg = -self.a_prior.log_prob(g.edata["a_first"]).mean() - self.a_prior.log_prob(g.edata["a_rest"]).mean()
-
-        g.edata["a"] = g.edata["a_first"]
-        x = self.gn0(g, x)
-
-        for idx in range(1, self.depth):
-            g.edata["a"] = g.edata["a_rest"][:, idx-1, :]
-            x = getattr(self, "gn%s" % idx)(g, x)
-
-
-        return x, nll_reg
-
-
-
 def accuracy_between(y_pred, y_true):
     if y_pred.dim() >= 2:
         y_pred = y_pred.argmax(dim=-1)
@@ -142,12 +28,11 @@ def run(args):
     g = dgl.to_bidirected(g)
     g = dgl.add_self_loop(g)
     g = g.int()#.to("cuda:0")
- 
-    def sampling_performance(g, net, n_samples=16):
 
-        y_pred = torch.stack([net(g, feats)[0].detach() for _ in range(n_samples)], dim=0).mean(dim=0).argmax(dim=-1, keepdim=True)
+    def sampling_performance(g, net, n_samples=16):
+        y_pred = net(g, feats, n_samples=n_samples)
         y_true = labels
-        
+
         _accuracy_tr = evaluator.eval({"y_true": y_true[train_idx], "y_pred": y_pred[train_idx]})["acc"]
         _accuracy_te = evaluator.eval({"y_true": y_true[test_idx], "y_pred": y_pred[test_idx]})["acc"]
         _accuracy_vl = evaluator.eval({"y_true": y_true[valid_idx], "y_pred": y_pred[valid_idx]})["acc"]
@@ -156,14 +41,18 @@ def run(args):
 
     layer = dgl.nn.GraphConv
 
-    net = Net(
+    net = stag.vi.StagVI_NodeClassification_RC(
         layer=layer,
         in_features=feats.size(-1),
         out_features=dataset.num_classes,
         hidden_features=args.hidden_features,
         activation=args.activation,
         depth=args.depth,
-    )# .to("cuda:0")
+        kl_scaling=args.kl_scaling,
+        a_prior=args.a_prior,
+        a_mu_init_std=args.a_mu_init_std,
+        a_log_sigma_init=args.a_log_sigma_init,
+    )
 
     if torch.cuda.is_available():
         net = net.cuda()
@@ -174,10 +63,31 @@ def run(args):
         feats = feats.cuda()
         labels = labels.cuda()
 
-
-
     import itertools
-    optimizer = torch.optim.Adam(net.parameters(), lr=1e-2)
+    optimizer = torch.optim.Adam(
+        [
+            {
+                "params": itertools.chain(
+                    *[
+                        getattr(net, "gn%s" % idx).parameters()
+                        for idx in range(net.depth-1)
+                    ]
+                ),
+                "lr": 1e-3,
+                "weight_decay": 5e-4,
+            },
+            {
+                "params": getattr(net, "gn%s" % (net.depth-1)).parameters(),
+                "lr": 1e-3,
+            },
+            {
+                "params": [getattr(net, "a_mu_%s" % idx) for idx in range(net.depth)] +\
+                    [getattr(net, "a_log_sigma_%s" % idx) for idx in range(net.depth)],
+                "lr": 0.1,
+            },
+
+        ]
+    )
 
     accuracy_tr = []
     accuracy_te = []
@@ -187,9 +97,7 @@ def run(args):
 
     for idx_epoch in range(args.n_epochs):
         optimizer.zero_grad()
-        out, nll_reg = net(g, feats)
-        out = out[train_idx].log_softmax(dim=-1)
-        loss = torch.nn.functional.nll_loss(out, labels.squeeze(1)[train_idx]) + nll_reg
+        loss = net.loss(g, feats, mask=train_idx, n_samples=8)
         loss.backward()
         optimizer.step()
         if idx_epoch % args.report_interval == 0:
