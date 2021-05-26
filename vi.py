@@ -110,7 +110,6 @@ class StagVI(torch.nn.Module):
         -------
         torch.Tensor : loss
         """
-        _g = g.local_var()
 
         # initialize losses
         neg_elbos = []
@@ -118,6 +117,7 @@ class StagVI(torch.nn.Module):
         xs = []
 
         for _ in range(n_samples):
+            _g = g.local_var()
             _g, _x = self._forward(_g, x)
 
             # posterior distribution
@@ -586,7 +586,5 @@ class StagVI_NodeClassification_REC(StagVI):
             _g.edata["a"] = _g.edata["a%s" % idx]
             x = getattr(self, "gn%s" % idx)(_g, x)
 
-        net.a_mean_history.append(_g.edata["a0"].mean().item())
-        net.a_std_history.append(_g.edata["a0"].std().item())
         _g.ndata["x"] = x
         return _g, x
