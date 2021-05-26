@@ -51,7 +51,49 @@ def run(args):
         )
 
     import itertools
-    optimizer = torch.optim.Adam(net.parameters(), args.lr)
+
+
+    optimizer = torch.optim.Adam(
+        [
+            {
+                "params": list(net.gn0_enc.parameters()) + list(net.gn1_enc.parameters()),
+                "lr": 1e-3,
+                "weight_decay": 5e-4,
+            },
+            {
+                "params": itertools.chain(
+                    *[
+                        getattr(net, "f_z_mu_%s" % idx).parameters()
+                        for idx in range(net.depth)
+                    ]
+                ),
+                "lr": 1e-3,
+            },
+            {
+                "params": itertools.chain(
+                    *[
+                        getattr(net, "f_z_log_sigma_%s" % idx).parameters()
+                        for idx in range(net.depth)
+                    ]
+                ),
+                "lr": 1e-3,
+            },
+            {
+                "params": itertools.chain(
+                    *[
+                        getattr(net, "gn%s" % idx).parameters()
+                        for idx in range(net.depth-1)
+                    ]
+                ),
+                "lr": 1e-3,
+                "weight_decay": 5e-4,
+            },
+            {
+                "params": getattr(net, "gn%s" % (net.depth-1)).parameters(),
+                "lr": 1e-3,
+            },
+        ]
+    )
 
     if torch.cuda.is_available():
         net = net.to('cuda:0')
