@@ -75,7 +75,7 @@ def run(args):
         optimizer.step()
         net.eval()
         if idx_epoch % args.report_interval == 0:
-            _accuracy_tr, _accuracy_te, _accuracy_vl = sampling_performance(g, net, n_samples=32)
+            _accuracy_tr, _accuracy_te, _accuracy_vl = sampling_performance(g, net, n_samples=8)
 
         accuracy_tr.append(_accuracy_tr)
         accuracy_te.append(_accuracy_te)
@@ -127,7 +127,7 @@ if __name__ == "__main__":
     parser.add_argument("--alpha", type=float, default=0.2)
     parser.add_argument("--layer", type=str, default="GraphConv")
     parser.add_argument("--n_epochs", type=int, default=3000)
-    parser.add_argument("--report_interval", type=int, default=100)
+    parser.add_argument("--report_interval", type=int, default=1)
     parser.add_argument("--a_prior", type=float, default=1.0)
     parser.add_argument("--a_log_sigma_init", type=float, default=-1.0)
     parser.add_argument("--a_mu_init_std", type=float, default=1.0)
