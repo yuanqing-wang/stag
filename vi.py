@@ -94,7 +94,7 @@ class StagVI(torch.nn.Module):
             for _ in range(self.depth)
         ]
 
-    def loss(self, g, x, y, n_samples=1, mask=None):
+    def loss(self, g, x, y, n_samples=1, mask=None, edge_subsample=1.0):
         """ Training loss.
         Parameters
         ----------
@@ -129,26 +129,32 @@ class StagVI(torch.nn.Module):
             # variational posterior
             q_a_array = self.q_a_array(_g)
 
-            # compute edge regularizer
-            _g.apply_edges(
-                lambda edge: {
-                    "reg": -sum(
-                        [
-                            p_a.log_prob(_g.edata["a%s" % idx]).sum(dim=-1)
-                            - q_a_array[idx].log_prob(_g.edata["a%s" % idx]).sum(dim=-1)\
-                            for idx in range(self.depth)
-                        ]
-                    )
-                }
-            )
 
-            aggregate_fn = dgl.function.copy_e('reg', 'm_reg')
+            if edge_subsample == 1.0:
+                edge_reg = -sum(
+                    [
+                        p_a.log_prob(_g.edata["a%s" % idx]).sum(dim=-1)
+                        - q_a_array[idx].log_prob(_g.edata["a%s" % idx]).sum(dim=-1)\
+                        for idx in range(self.depth)
+                    ]
+                )
 
-            # mean averages the regularization term
-            _g.update_all(aggregate_fn, dgl.function.mean(msg='m_reg', out='reg'))
+            else:
+                edge_idxs = range(_g.number_of_edges())
+                import random
+                random.shuffle(edge_idxs)
+                edge_idxs = edge_idxs[:int(edge_subsample*len(edge_idxs))]
+
+                edge_reg = -sum(
+                    [
+                        p_a.log_prob(_g.edata["a%s" % idx][edge_idxs]).sum(dim=-1)
+                        - q_a_array[idx].log_prob(_g.edata["a%s" % idx][edge_idxs]).sum(dim=-1)\
+                        for idx in range(self.depth)
+                    ]
+                ) / edge_subsample
 
             neg_elbo_z = -p_y_given_x_z.log_prob(y)[mask].sum()\
-                + self.kl_scaling * _g.ndata['reg'][mask].sum()
+                + self.kl_scaling * edge_reg.sum()
 
             neg_elbos.append(neg_elbo_z)
 
