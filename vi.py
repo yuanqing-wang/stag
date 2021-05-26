@@ -110,12 +110,7 @@ class StagVI(torch.nn.Module):
         -------
         torch.Tensor : loss
         """
-<<<<<<< HEAD
 
-=======
-        global _g
-        _g = g.local_var()
->>>>>>> 6e19af33296300ffd2dfaa98449f8b620875600a
         # initialize losses
         neg_elbos = []
 
@@ -135,7 +130,7 @@ class StagVI(torch.nn.Module):
             q_a_array = self.q_a_array(_g)
 
             # compute in_edges
-            in_edges = _g.in_edges(torch.arange(len(mask), device=_g.device)[mask])
+            in_edges = _g.in_edges(torch.arange(len(mask), device=_g.device, dtype=torch.int32)[mask])
 
             # compute edge regularizer
             _g.apply_edges(
@@ -177,11 +172,11 @@ class StagVI(torch.nn.Module):
         _g = g.local_var()
         if mask is None:
             x = torch.stack(
-                [self._forward(_g, x)[1].softmax(dim=-1) for _ in range(n_samples)], dim=0
+                [self._forward(_g, x)[1].softmax(dim=-1).detach() for _ in range(n_samples)], dim=0
             ).mean(dim=0)
         else:
             x = torch.stack(
-                    [self._forward(_g, x)[1][mask].softmax(dim=-1) for _ in range(n_samples)], dim=0
+                    [self._forward(_g, x)[1][mask].softmax(dim=-1).detach() for _ in range(n_samples)], dim=0
             ).mean(dim=0)
         return x
 
