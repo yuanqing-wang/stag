@@ -94,7 +94,7 @@ class StagVI(torch.nn.Module):
             for _ in range(self.depth)
         ]
 
-    def loss(self, g, x, y, n_samples=1, mask=None):
+    def loss(self, g, x, y, n_samples=1, mask=None, edge_subsample=1.0):
         """ Training loss.
         Parameters
         ----------
@@ -134,8 +134,8 @@ class StagVI(torch.nn.Module):
                 lambda edge: {
                     "reg": -sum(
                         [
-                            p_a.log_prob(_g.edata["a%s" % idx]).sum(dim=-1)
-                            - q_a_array[idx].log_prob(_g.edata["a%s" % idx]).sum(dim=-1)\
+                            p_a.log_prob(edge.data["a%s" % idx]).sum(dim=-1)
+                            - q_a_array[idx].log_prob(edge.data["a%s" % idx]).sum(dim=-1)\
                             for idx in range(self.depth)
                         ]
                     )
@@ -148,7 +148,7 @@ class StagVI(torch.nn.Module):
             _g.update_all(aggregate_fn, dgl.function.mean(msg='m_reg', out='reg'))
 
             neg_elbo_z = -p_y_given_x_z.log_prob(y)[mask].sum()\
-                + self.kl_scaling * _g.ndata['reg'][mask].sum()
+                + self.kl_scaling * _g.ndata["reg"][mask].sum()
 
             neg_elbos.append(neg_elbo_z)
 
