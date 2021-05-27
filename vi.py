@@ -160,13 +160,6 @@ class StagVI(torch.nn.Module):
             # mean averages the regularization term
             _g.update_all(aggregate_fn, dgl.function.mean(msg='m_reg', out='reg'))
 
-            print(p_y_given_x_z)
-            print(y.shape)
-            print(y[mask].shape)
-
-            print(-p_y_given_x_z.log_prob(y)[mask].sum())
-            print(self.kl_scaling * _g.ndata['reg'][mask].sum())
-
             neg_elbo_z = -p_y_given_x_z.log_prob(y)[mask].sum()\
                 + self.kl_scaling * _g.ndata['reg'][mask].sum() / edge_subsample
 
