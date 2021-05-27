@@ -131,8 +131,8 @@ class StagVI(torch.nn.Module):
                 lambda edge: {
                     "reg": -sum(
                         [
-                            p_a.log_prob(edge.data["a%s" % idx])
-                            - q_a_array[idx].log_prob(edge.data["a%s" % idx])\
+                            p_a.log_prob(edge.data["a%s" % idx]).sum(dim=-1)
+                            - q_a_array[idx].log_prob(edge.data["a%s" % idx]).sum(dim=-1)\
                             for idx in range(self.depth)
                         ]
                     )
@@ -140,7 +140,7 @@ class StagVI(torch.nn.Module):
             )
 
             neg_elbo_z = -p_y_given_x_z.log_prob(y)[mask].sum()\
-                + self.kl_scaling * _g.ndata['reg'][mask].sum()
+                + self.kl_scaling * _g.edata['reg'].sum()
 
             neg_elbos.append(neg_elbo_z)
 
