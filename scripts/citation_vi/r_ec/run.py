@@ -28,20 +28,22 @@ def run(args):
     if args.data == "cora":
         ds = dgl.data.CoraGraphDataset()
         g = ds[0]
-        net = stag.vi.StagVI_NodeClassification_R1(
+        net = stag.vi.StagVI_NodeClassification_REC(
             layer=layer,
             in_features=1433,
             out_features=7,
             hidden_features=args.hidden_features,
             activation=args.activation,
             depth=args.depth,
+            a_prior=args.a_prior,
+            kl_scaling=args.kl_scaling,
         )
 
 
     elif args.data == "citeseer":
         ds = dgl.data.CiteseerGraphDataset()
         g = ds[0]
-        net = stag.vi.StagVI_NodeClassification_R1(
+        net = stag.vi.StagVI_NodeClassification_REC(
             layer=layer,
             in_features=3703,
             out_features=6,
@@ -102,17 +104,19 @@ def run(args):
     accuracy_tr = []
     accuracy_te = []
     accuracy_vl = []
-
+    losses = []
 
     for idx_epoch in range(args.n_epochs):
-        net.train()
         optimizer.zero_grad()
         loss = net.loss(g, g.ndata['feat'], g.ndata['label'], mask=g.ndata['train_mask'], n_samples=8)
         loss.backward()
         optimizer.step()
-        net.eval()
         if idx_epoch % args.report_interval == 0:
-            _accuracy_tr, _accuracy_te, _accuracy_vl = sampling_performance(g, net, n_samples=32)
+            _accuracy_tr, _accuracy_te, _accuracy_vl = sampling_performance(g, net, n_samples=8)
+        
+        with torch.no_grad():
+            loss = net.loss(g, g.ndata["feat"], g.ndata["label"], mask=g.ndata["val_mask"], n_samples=8).item()
+            losses.append(loss)
 
         accuracy_tr.append(_accuracy_tr)
         accuracy_te.append(_accuracy_te)
@@ -127,6 +131,7 @@ def run(args):
     np.save(args.out + "/accuracy_tr.npy", accuracy_tr)
     np.save(args.out + "/accuracy_vl.npy", accuracy_vl)
     np.save(args.out + "/accuracy_te.npy", accuracy_te)
+    np.save(args.out + "/losses.npy", losses)
 
 
     def find_best_epoch(accuracy_vl):
@@ -165,11 +170,12 @@ if __name__ == "__main__":
     parser.add_argument("--alpha", type=float, default=0.2)
     parser.add_argument("--layer", type=str, default="GraphConv")
     parser.add_argument("--n_epochs", type=int, default=3000)
-    parser.add_argument("--report_interval", type=int, default=100)
+    parser.add_argument("--report_interval", type=int, default=1)
     parser.add_argument("--a_prior", type=float, default=1.0)
     parser.add_argument("--a_log_sigma_init", type=float, default=-1.0)
     parser.add_argument("--a_mu_init_std", type=float, default=1.0)
     parser.add_argument("--lr_vi", type=float, default=1e-3)
     parser.add_argument("--data", type=str, default="cora")
+    parser.add_argument("--kl_scaling", type=float, default=1.0)
     args = parser.parse_args()
     run(args)

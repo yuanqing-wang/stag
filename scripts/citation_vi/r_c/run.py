@@ -53,6 +53,9 @@ def run(args):
             activation=args.activation,
             depth=args.depth,
             kl_scaling=args.kl_scaling,
+            a_prior=args.a_prior,
+            a_mu_init_std=args.a_mu_init_std,
+            a_log_sigma_init=args.a_log_sigma_init,
         )
 
     import itertools
@@ -87,58 +90,33 @@ def run(args):
         net = net.to('cuda:0')
         g = g.to('cuda:0')
 
-    accuracy_tr = []
     accuracy_te = []
     accuracy_vl = []
-
+    losses = []
 
     for idx_epoch in range(args.n_epochs):
-        net.train()
         optimizer.zero_grad()
         loss = net.loss(g, g.ndata['feat'], g.ndata['label'], mask=g.ndata['train_mask'], n_samples=8)
         loss.backward()
         optimizer.step()
-        net.eval()
-        if idx_epoch % args.report_interval == 0:
-            _accuracy_tr, _accuracy_te, _accuracy_vl = sampling_performance(g, net, n_samples=8)
+        _accuracy_tr, _accuracy_te, _accuracy_vl = sampling_performance(g, net, n_samples=8)
 
-        accuracy_tr.append(_accuracy_tr)
         accuracy_te.append(_accuracy_te)
         accuracy_vl.append(_accuracy_vl)
+        
+        with torch.no_grad():
+            loss = net.loss(g, g.ndata['feat'], g.ndata['label'], mask=g.ndata['val_mask'], n_samples=8).item()
+            losses.append(loss)
 
-    accuracy_tr = np.array(accuracy_tr)
+    losses = np.array(losses)
     accuracy_te = np.array(accuracy_te)
     accuracy_vl = np.array(accuracy_vl)
 
     import os
     os.mkdir(args.out)
-    np.save(args.out + "/accuracy_tr.npy", accuracy_tr)
-    np.save(args.out + "/accuracy_vl.npy", accuracy_vl)
+    np.save(args.out + "/losses.npy", losses)
     np.save(args.out + "/accuracy_te.npy", accuracy_te)
-
-
-    def find_best_epoch(accuracy_vl):
-        for idx in range(len(accuracy_vl)):
-            ok = True
-            for _idx in range(idx, idx+10):
-                if accuracy_vl[_idx] > accuracy_vl[idx]:
-                    ok = False
-                    break
-                if ok is True:
-                    return idx
-        return len(accuracy_vl) - 1
-
-    best_epoch = find_best_epoch(accuracy_vl)
-    import pandas as pd
-    df = pd.DataFrame.from_dict(
-        {
-            "tr": [accuracy_tr[best_epoch]],
-            "te": [accuracy_te[best_epoch]],
-            "vl": [accuracy_vl[best_epoch]],
-        },
-    )
-
-    df.to_markdown(open(args.out + "/overview.md", "w"))
+    np.save(args.out + "/accuracy_vl.npy", accuracy_vl)
 
 if __name__ == "__main__":
     import argparse
@@ -152,7 +130,7 @@ if __name__ == "__main__":
     parser.add_argument("--alpha", type=float, default=0.2)
     parser.add_argument("--layer", type=str, default="GraphConv")
     parser.add_argument("--n_epochs", type=int, default=3000)
-    parser.add_argument("--report_interval", type=int, default=1)
+    parser.add_argument("--report_interval", type=int, default=10)
     parser.add_argument("--a_prior", type=float, default=1.0)
     parser.add_argument("--a_log_sigma_init", type=float, default=-1.0)
     parser.add_argument("--a_mu_init_std", type=float, default=1.0)
