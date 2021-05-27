@@ -83,7 +83,7 @@ class StagVI(torch.nn.Module):
         """
         return torch.distributions.categorical.Categorical(logits=x)
 
-    def q_a_array(self, g, in_edges=None):
+    def q_a_array(self, g):
         return [
             torch.distributions.Normal(
                 loc=self.a_mu,
@@ -122,46 +122,25 @@ class StagVI(torch.nn.Module):
 
             # prior
             p_a = self.a_prior
-            
-            if mask.dtype == torch.bool:
-                _mask = torch.arange(_g.number_of_nodes(), device=_g.device, dtype=_g.idtype)[mask]
-            else:
-                _mask = mask.to(_g.idtype)
-
-            # compute in_edges
-            in_edges = _g.in_edges(_mask)
-
-            if edge_subsample < 1.0:
-                subsample_idxs = torch.randperm(len(in_edges))[:int(edge_subsample*len(in_edges[0]))]
-                in_edges = (
-                    in_edges[0][subsample_idxs],
-                    in_edges[1][subsample_idxs],
-                )
 
             # variational posterior
-            q_a_array = self.q_a_array(_g, in_edges=in_edges)
+            q_a_array = self.q_a_array(_g)
 
             # compute edge regularizer
             _g.apply_edges(
                 lambda edge: {
                     "reg": -sum(
                         [
-                            p_a.log_prob(edge.data["a%s" % idx]).sum(dim=-1)
-                            - q_a_array[idx].log_prob(edge.data["a%s" % idx]).sum(dim=-1)\
+                            p_a.log_prob(edge.data["a%s" % idx])
+                            - q_a_array[idx].log_prob(edge.data["a%s" % idx])\
                             for idx in range(self.depth)
                         ]
                     )
                 },
-                edges=in_edges,
             )
 
-            aggregate_fn = dgl.function.copy_e('reg', 'm_reg')
-
-            # mean averages the regularization term
-            _g.update_all(aggregate_fn, dgl.function.mean(msg='m_reg', out='reg'))
-
             neg_elbo_z = -p_y_given_x_z.log_prob(y)[mask].sum()\
-                + self.kl_scaling * _g.ndata['reg'][mask].sum() / edge_subsample
+                + self.kl_scaling * _g.ndata['reg'][mask].sum()
 
             neg_elbos.append(neg_elbo_z)
 
@@ -320,7 +299,7 @@ class StagVI_NodeClassification_RC(StagVI):
                 )
             )
 
-    def q_a_array(self, g, in_edges=None):
+    def q_a_array(self, g):
         return [
             torch.distributions.Normal(
                 loc=getattr(self, "a_mu_%s" % idx),
@@ -361,7 +340,6 @@ class StagVI_NodeClassification_RC(StagVI):
         _g.ndata["x"] = x
 
         return _g, x
-
 
 class StagVI_NodeClassification_RE(StagVI):
     def __init__(
@@ -519,11 +497,11 @@ class StagVI_NodeClassification_REC(StagVI):
         self.a_mean_history = []
         self.a_std_history = []
 
-    def q_a_array(self, g, in_edges=None):
+    def q_a_array(self, g):
         return [
             torch.distributions.Normal(
-                loc=g.edges[in_edges].data["mu_%s" % idx],
-                scale=g.edges[in_edges].data["sigma_%s" % idx],
+                loc=g.edges.data["mu_%s" % idx],
+                scale=g.edges.data["sigma_%s" % idx],
             )
             for idx in range(self.depth)
         ]
