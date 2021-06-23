@@ -1,151 +1,98 @@
 import torch
 from dataset import Dataset
 import vi
+import dgl
 
-def stag_copy_src_vi(src="h", out="m"):
-    def message_fun(edges):
-        if "a" in edges.data:
-            return {out: edges.src[src] * edges.data["a"]}
-        return {out: edges.src[src]}
+class StagLayer(torch.nn.Module):
+    """ Make a DGL Graph Conv Layer stochastic.
 
-    return message_fun
+    Parameters
+    ----------
+    base_layer : torch.nn.Module
+        A DGL Graph Conv layer.
 
-def stag_copy_src_normal(src='h', out='m', alpha=0.1):
-    def message_fun(edges):
-        h = edges.src[src]
-        mask = torch.distributions.normal.Normal(
-            loc=torch.tensor(1.0, device=h.device),
-            scale=torch.tensor(alpha, device=h.device),
-        ).sample(h.shape)
-        return {out: (mask * h)}
-    return message_fun
+    edge_weight_distribution : torch.distributions.Distribution
+        Edge weight distribution.
 
+    Methods
+    -------
+    forward(graph, feat)
+        Forward pass.
 
-def stag_sum_dropout(msg='m', out='h', alpha=0.1):
-    def reduce_func(nodes):
-        m = nodes.mailbox[msg]
-        if nodes._ntype == "_N":
-            mask = torch.distributions.Bernoulli(
-                torch.tensor(1.0-alpha, device=m.device),
-            ).sample((1, 1, m.shape[-1]))
+    """
+    def __init__(
+        self,
+        base_layer: torch.nn.Module,
+        edge_weight_distribution: \
+        torch.distributions.Distribution=torch.distributions.Normal(1.0, 1.0),
+    ) -> None:
+        super(StagLayer, self).__init__()
 
-            return {out: (mask * m).sum(dim=1)}
-        else:
-            return {out: m.sum(dim=1)}
+        # assertions
+        assert edge_weight_distribution.event_shape == torch.Size([])
 
-    return reduce_func
+        self.base_layer = base_layer
+        self.edge_weight_distribution = edge_weight_distribution
 
-def stag_sum_bernoulli_shared(msg='m', out='h', alpha=0.1):
-    def reduce_func(nodes):
-        m = nodes.mailbox[msg]
-        if nodes._ntype == "_N":
-            mask = torch.distributions.Bernoulli(
-                torch.tensor(1.0-alpha, device=m.device),
-            ).sample((m.shape[0], m.shape[1], 1))
+    def forward(self, graph, feat):
+        """ Forward pass. """
+        # sample edge weight
+        event_shape = self.edge_weight_distribution.event_shape
 
-            mask = torch.where(
-                torch.gt(mask, 0.0),
-                mask / mask.sum(dim=1, keepdims=True) * mask.shape[1],
-                mask
-            )
+        # rsample noise
+        noise = self.rsample_noise(graph, feat)
 
-            return {out: (mask * m).sum(dim=1)}
-        else:
-            return {out: m.sum(dim=1)}
-    return reduce_func
-
-def stag_sum_bernoulli(msg='m', out='h', alpha=0.1):
-    def reduce_func(nodes):
-        m = nodes.mailbox[msg]
-        if nodes._ntype == "_N":
-            mask = torch.distributions.Bernoulli(
-                torch.tensor(1.0-alpha, device=m.device),
-            ).sample(m.shape)
-
-            mask = torch.where(
-                torch.gt(mask, 0.0),
-                mask / mask.sum(dim=1, keepdims=True) * mask.shape[1],
-                mask
-            )
-
-            return {out: (mask * m).sum(dim=1)}
-        else:
-            return {out: m.sum(dim=1)}
-
-    return reduce_func
-
-def stag_sum_normal(msg='m', out='h', alpha=0.1):
-    def reduce_func(nodes):
-        m = nodes.mailbox[msg]
-        mask = torch.distributions.normal.Normal(
-            loc=torch.tensor(1.0, device=m.device),
-            scale=torch.tensor(alpha, device=m.device),
-        ).sample(m.shape)
-
-        mask = torch.where(
-            torch.gt(mask, 0.0),
-            mask / mask.sum(dim=1, keepdims=True),
-            mask
+        return self.base_layer.forward(
+            graph=graph,
+            feat=feat,
+            edge_weight=noise,
         )
 
-        return {out: (mask * m).sum(dim=1)}
-    return reduce_func
+    def q_a(self, noise):
+        
 
 
-def stag_copy_src_uniform(src='h', out='m', alpha=0.1):
-    if isinstance(alpha, float):
-        def message_fun(edges):
-            h = edges.src[src]
-            mask = torch.distributions.uniform.Uniform(
-                low=torch.tensor(1.0-alpha, device=h.device),
-                high=torch.tensor(1.0+alpha, device=h.device),
-            ).sample(h.shape)
-            return {out: (mask * h)}
-        return message_fun
+    def rsample_noise(self, graph, feat):
+        noise = {
+            torch.Size([]): self._rsample_noise_r1(graph, feat),
+            feat.shape: self._rsample_noise_rc(graph, feat),
+            torch.Size([graph.number_of_edges()]):\
+                self._rsample_noise_re(graph, feat),
+            torch.Size([graph.number_of_edges(), feat.shape[1]]):\
+                self._rsample_noise_rec(graph, feat)
+        }[self.edge_weight_distribution.event_shape]
 
-def stag_copy_src_bernoulli(src='h', out='m', alpha=0.1):
-    if isinstance(alpha, float):
-        def message_fun(edges):
-            h = edges.src[src]
-            mask = torch.distributions.bernoulli.Bernoulli(
-                probs=torch.tensor(1.0-alpha, device=h.device),
-            ).sample(h.shape)
-            return {out: (mask * h)}
-        return message_fun
+        event_shape = self.edge_weight_distribution.event_shape
 
-def stag_copy_src_normal_shared(src='h', out='m', alpha=0.1):
-    def message_fun(edges):
-        h = edges.src[src]
-        if "mask" not in edges.data:
-            mask = torch.distributions.normal.Normal(
-                loc=torch.tensor(1.0, device=h.device),
-                scale=torch.tensor(alpha, device=h.device),
-            ).sample(h.shape)
-            edges.data["mask"] = mask
-        return {out: (edges.data["mask"] * h)}
-    return message_fun
+        if event_shape == torch.Size([]):
+            return self._rsample_noise_r1(graph, feat)
+        elif event_shape == feat.shape:
+            return self._rsample_noise_rc(graph, feat)
+        elif event_shape == torch.Size([graph.number_of_edges()]):
+            return self._rsample_noise_re(graph, feat)
+        elif event_shape == torch.Size(
+            [graph.number_of_edges(), feat.shape[1]]
+        ):
+            return self._rsample_noise_rec(graph, feat)
 
+    def _rsample_noise_r1(self, graph, feat):
+        """ Sample from a distribution on $\mathbb{R}^1$. """
+        return self.edge_weight_distribution.rsample(
+            [graph.number_of_edges(), feat.shape[1]],
+        )
 
-def stag_copy_src_uniform_shared(src='h', out='m', alpha=0.1):
-    def message_fun(edges):
-        h = edges.src[src]
-        if "mask" not in edges.data:
-            mask = torch.distributions.uniform.Uniform(
-                high=torch.tensor(1.0+alpha, device=h.device),
-                low=torch.tensor(1.0-alpha, device=h.device),
-            ).sample(h.shape)
-            edges.data["mask"] = mask
-        return {out: (edges.data["mask"] * h)}
-    return message_fun
+    def _rsample_noise_rc(self, graph, feat):
+        """ Sample from a distribution on $\mathbb{R}^C$. """
+        return self.edge_weight_distribution.rsample(
+            [graph.number_of_edges()],
+        )
 
+    def _rsample_noise_re(self, graph, feat):
+        """ Sample from a distribution on $\mathbb{R}^E$. """
+        return self.edge_weight_distribution.rsample(
+            [feat.shape[1]]
+        ).transpose(1, 0)
 
-def stag_copy_src_bernoulli_shared(src='h', out='m', alpha=0.1):
-    def message_fun(edges):
-        h = edges.src[src]
-        if "mask" not in edges.data:
-            mask = torch.distributions.bernoulli.Bernoulli(
-                torch.tensor(1.0-alpha, device=h.device),
-            ).sample(h.shape)
-            edges.data["mask"] = mask
-        return {out: (edges.data["mask"] * h)}
-    return message_fun
+    def _rsample_noise_rec(self, graph, feat):
+        """ Sample from a distribution on $\mathbb{R}^{E \times C}$. """
+        return self.edge_weight_distribution.rsample()
