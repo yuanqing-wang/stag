@@ -52,3 +52,15 @@ def test_forward_rec():
     h = torch.randn(3, 16)
     h = layer(g, h)
     assert h.shape == torch.Size([3, 32])
+
+def test_forward_zero():
+    import torch, dgl
+    import stag
+    layer = dgl.nn.GraphConv(16, 32)
+    p_a = torch.distributions.Uniform(0.0, 0.0)
+    layer = stag.layers.StagLayer(layer, edge_weight_distribution=p_a)
+    g = dgl.rand_graph(3, 9)
+    h = torch.randn(3, 16)
+    _h = layer(g, h)
+    assert h.shape == torch.Size([3, 32])
+    assert (_h == h).all()
