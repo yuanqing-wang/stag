@@ -43,7 +43,9 @@ def run(args):
         layers=layers,
     )
 
-    print(model)
+    if torch.cuda.is_available():
+        model = model.to("cuda:0")
+        g = g.to("cuda:0")
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     losses = []
@@ -66,10 +68,28 @@ def run(args):
                 n_samples=4,
             )
 
-        y_hat = model(g, g.ndata["feat"], n_samples=4)[g.ndata["test_mask"]]
-        y = g.ndata["label"][g.ndata["test_mask"]]
-        accuracy_te = float((y_hat == y).sum()) / len(y_hat)
-        print(accuracy_te)
+            if early_stopping(loss_vl):
+                break
+
+    y_hat = model(g, g.ndata["feat"], n_samples=4)[g.ndata["test_mask"]]
+    y = g.ndata["label"][g.ndata["test_mask"]]
+    accuracy_te = float((y_hat == y).sum()) / len(y_hat)
+
+    y_hat = model(g, g.ndata["feat"], n_samples=4)[g.ndata["val_mask"]]
+    y = g.ndata["label"][g.ndata["val_mask"]]
+    accuracy_vl = float((y_hat == y).sum()) / len(y_hat)
+
+    import pandas as pd
+    df = pd.DataFrame(
+        {
+            args.data: {
+                "accuracy_te": accuracy_te.item(),
+                "accuracy_vl": accuracy_vl.item(),
+            }
+        }
+    )
+
+    df.to_csv("out.csv")
 
 if __name__ == "__main__":
     import argparse
