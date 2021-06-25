@@ -43,6 +43,8 @@ def run(args):
         layers=layers,
     )
 
+    print(model)
+
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
     losses = []
     from stag.utils import EarlyStopping
@@ -63,13 +65,11 @@ def run(args):
                 g, g.ndata['feat'], y=g.ndata['label'], mask=g.ndata["val_mask"],
                 n_samples=4,
             )
-            if early_stopping(loss_vl):
-                break
 
-    y_hat = model(g, g.ndata["feat"], n_samples=32)[g.ndata["test_mask"]]
-    y = g.ndata["label"][g.ndata["test_mask"]]
-    accuracy_te = float((y_hat == y).sum()) / len(y_hat)
-    print(accuracy_te)
+        y_hat = model(g, g.ndata["feat"], n_samples=4)[g.ndata["test_mask"]]
+        y = g.ndata["label"][g.ndata["test_mask"]]
+        accuracy_te = float((y_hat == y).sum()) / len(y_hat)
+        print(accuracy_te)
 
 if __name__ == "__main__":
     import argparse
