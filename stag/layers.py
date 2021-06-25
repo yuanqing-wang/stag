@@ -31,7 +31,27 @@ class StagLayer(torch.nn.Module):
         assert edge_weight_distribution.event_shape == torch.Size([])
 
         self.base_layer = base_layer
-        self.edge_weight_distribution = edge_weight_distribution
+
+        # re-initialize edge weight distribution
+        edge_weight_distribution_parameter_names\
+            = list(edge_weight_distribution.arg_constraints.keys())
+
+        edge_weight_distribution_parameters = {
+            key: getattr(edge_weight_distribution, key)
+            for key in edge_weight_distribution_parameter_names
+            if hasattr(edge_weight_distribution, key)
+        }
+
+        for key, value in edge_weight_distribution_parameters:
+            self.register_buffer(key, value)
+
+        self.edge_weight_distribution\
+            = edge_weight_distribution.__class__.__init__(
+                **{
+                    key, getattr(self, key)
+                    for key in edge_weight_distribution_parameters.keys()
+                }
+            )
 
     def forward(self, graph, feat):
         """ Forward pass. """
