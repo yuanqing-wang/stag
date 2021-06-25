@@ -42,16 +42,20 @@ class StagLayer(torch.nn.Module):
             if hasattr(edge_weight_distribution, key)
         }
 
-        for key, value in edge_weight_distribution_parameters:
-            self.register_buffer(key, value)
+        for key, value in edge_weight_distribution_parameters.items():
+            self.register_buffer(key, torch.tensor(value))
+        
+        self.edge_weight_distribution_instance = edge_weight_distribution.__class__
+        self.edge_weight_distribution_parameters = edge_weight_distribution_parameters
 
-        self.edge_weight_distribution\
-            = edge_weight_distribution.__class__.__init__(
-                **{
-                    key, getattr(self, key)
-                    for key in edge_weight_distribution_parameters.keys()
-                }
-            )
+    @property
+    def edge_weight_distribution(self):
+        return self.edge_weight_distribution_instance(
+            **{
+                key:getattr(self, key)
+                for key in self.edge_weight_distribution_parameters.keys()
+            }
+        )
 
     def forward(self, graph, feat):
         """ Forward pass. """
