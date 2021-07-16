@@ -117,6 +117,15 @@ class StagLayer(torch.nn.Module):
         return self.edge_weight_distribution.rsample()
 
 
+class FeatOnlyLayer(torch.nn.Module):
+    def __init__(self, layer):
+        super(FeatOnlyLayer, self).__init__()
+        self.layer = layer
+
+    def forward(self, graph, feat):
+        return self.layer(feat)
+
+
 class StagMeanFieldVariationalInferenceLayer(StagLayer):
     """ Variational Inference layer with STAG.
 

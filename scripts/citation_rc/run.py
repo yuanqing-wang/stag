@@ -11,70 +11,54 @@ def run(args):
 
     layers = torch.nn.ModuleList()
     layers.append(
-        stag.layers.StagLayer(
+        stag.layers.StagMeanFieldVariationalInferenceLayer(
             dgl.nn.GraphConv(
                 in_features,
                 args.hidden_features,
                 activation=torch.nn.functional.relu,
             ),
-            edge_weight_distribution=torch.distributions.Normal(1.0, args.std),
         )
     )
-
-    layers.append(
-        stag.layers.FeatOnlyLayer(
-            torch.nn.Dropout(),
-        ),
-    )
-
     for idx in range(1, args.depth-1):
         layers.append(
-            stag.layers.StagLayer(
+            stag.layers.StagMeanFieldVariationalInferenceLayer(
                 dgl.nn.GraphConv(
                     args.hidden_features,
                     args.hidden_features,
                     activation=torch.nn.functional.relu,
                 ),
-                edge_weight_distribution=torch.distributions.Normal(1.0, args.std),
             ),
         )
-
-        layers.append(
-            stag.layers.FeatOnlyLayer(
-                torch.nn.Dropout(),
-            ),
-        )
-
     layers.append(
-        stag.layers.StagLayer(
+        stag.layers.StagMeanFieldVariationalInferenceLayer(
             dgl.nn.GraphConv(
                 args.hidden_features,
                 out_features,
                 activation=lambda x: torch.nn.functional.softmax(x, dim=-1),
             ),
-            edge_weight_distribution=torch.distributions.Normal(1.0, args.std),
         )
     )
 
     model = stag.models.StagModel(
         layers=layers,
+        kl_scaling=1e-3,
     )
-
-    print(model)
 
     if torch.cuda.is_available():
         model = model.to("cuda:0")
         g = g.to("cuda:0")
 
-    optimizer = torch.optim.Adam(model.parameters(), args.learning_rate, weight_decay=5e-4)
+    optimizer = torch.optim.Adam(model.parameters(), args.learning_rate)
     from stag.utils import EarlyStopping
-    early_stopping = EarlyStopping(patience=10)
+    early_stopping = EarlyStopping()
 
     for idx_epoch in range(args.n_epochs):
         model.train()
         optimizer.zero_grad()
-        y_hat = model.forward(g, g.ndata["feat"], n_samples=1, return_parameters=True)[g.ndata["train_mask"]]
-        loss = torch.nn.functional.nll_loss(input=y_hat.log(), target=g.ndata["label"][g.ndata["train_mask"]])
+        loss = model.loss(
+            g, g.ndata['feat'], y=g.ndata['label'], mask=g.ndata["train_mask"],
+            n_samples=args.n_samples,
+        )
         loss.backward()
         optimizer.step()
 
@@ -83,7 +67,14 @@ def run(args):
             loss_vl = model.loss(
                 g, g.ndata['feat'], y=g.ndata['label'], mask=g.ndata["val_mask"],
                 n_samples=args.n_samples,
+                kl_scaling=0.0,
             )
+
+            y_hat = model.forward(g, g.ndata["feat"], n_samples=args.n_samples, return_parameters=True).argmax(dim=-1)[g.ndata["val_mask"]]
+            y = g.ndata["label"][g.ndata["val_mask"]]
+            accuracy_vl = float((y_hat == y).sum()) / len(y_hat)
+
+            print(accuracy_vl)
 
             if early_stopping(loss_vl): break
 
