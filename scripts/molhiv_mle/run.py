@@ -76,11 +76,12 @@ def run(args):
 
     for idx_epoch in range(args.n_epochs):
         model.train()
+        for g in train_loader:
         optimizer.zero_grad()
-        y_hat = model.forward(g, g.ndata["feat"], n_samples=1, return_parameters=True)[g.ndata["train_mask"]]
-        loss = torch.nn.functional.nll_loss(input=y_hat.log(), target=g.ndata["label"][g.ndata["train_mask"]])
-        loss.backward()
-        optimizer.step()
+            y_hat = model.forward(g, g.ndata["feat"], n_samples=1, return_parameters=True)[g.ndata["train_mask"]]
+            loss = torch.nn.functional.nll_loss(input=y_hat.log(), target=g.ndata["label"][g.ndata["train_mask"]])
+            loss.backward()
+            optimizer.step()
 
         model.eval()
         with torch.no_grad():
