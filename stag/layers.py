@@ -1,5 +1,6 @@
 import math
 import torch
+import dgl
 from typing import Union
 
 class StagLayer(torch.nn.Module):
@@ -44,7 +45,7 @@ class StagLayer(torch.nn.Module):
 
         for key, value in edge_weight_distribution_parameters.items():
             self.register_buffer(key, torch.tensor(value))
-        
+
         self.edge_weight_distribution_instance = edge_weight_distribution.__class__
         self.edge_weight_distribution_parameters = edge_weight_distribution_parameters
 
@@ -125,6 +126,18 @@ class FeatOnlyLayer(torch.nn.Module):
     def forward(self, graph, feat):
         return self.layer(feat)
 
+class SumNodes(torch.nn.Module):
+    def __init__(self, name="to_sum"):
+        super(SumNodes, self).__init__()
+        self.name = name
+
+    def forward(self, graph, feat):
+        graph = graph.local_var()
+        graph.ndata[self.name] = feat
+        print("batch_size, ", graph.batch_size)
+        feat = dgl.sum_nodes(graph, self.name)
+        print(feat.shape)
+        return feat
 
 class StagMeanFieldVariationalInferenceLayer(StagLayer):
     """ Variational Inference layer with STAG.

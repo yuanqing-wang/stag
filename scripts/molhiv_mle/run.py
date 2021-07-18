@@ -7,6 +7,8 @@ def run(args):
     from torch.utils.data import DataLoader
 
     dataset = DglGraphPropPredDataset(name="ogbg-molhiv")
+    in_features = 9
+    out_features = 1
 
     split_idx = dataset.get_idx_split()
     train_loader = DataLoader(dataset[split_idx["train"]], batch_size=32, shuffle=True, collate_fn=collate_dgl)
@@ -53,18 +55,29 @@ def run(args):
         stag.layers.StagLayer(
             dgl.nn.GraphConv(
                 args.hidden_features,
-                out_features,
-                activation=lambda x: torch.nn.functional.softmax(x, dim=-1),
+                args.hidden_features,
             ),
             edge_weight_distribution=torch.distributions.Normal(1.0, args.std),
         )
     )
 
+    layers.append(
+        stag.layers.SumNodes(),
+    )
+
+    # layers.append(
+    #     stag.layers.FeatOnlyLayer(
+    #         torch.nn.Sequential(
+    #             torch.nn.Linear(args.hidden_features, args.hidden_features),
+    #             torch.nn.ReLU(),
+    #             torch.nn.Linear(args.hidden_features, out_features),
+    #         )
+    #     )
+    # )
+
     model = stag.models.StagModel(
         layers=layers,
     )
-
-    print(model)
 
     if torch.cuda.is_available():
         model = model.to("cuda:0")
@@ -76,10 +89,9 @@ def run(args):
 
     for idx_epoch in range(args.n_epochs):
         model.train()
-        for g in train_loader:
-        optimizer.zero_grad()
-            y_hat = model.forward(g, g.ndata["feat"], n_samples=1, return_parameters=True)[g.ndata["train_mask"]]
-            loss = torch.nn.functional.nll_loss(input=y_hat.log(), target=g.ndata["label"][g.ndata["train_mask"]])
+        for g, y in train_loader:
+            optimizer.zero_grad()
+            y_hat = model.forward(g, g.ndata["feat"], n_samples=1, return_parameters=True)
             loss.backward()
             optimizer.step()
 

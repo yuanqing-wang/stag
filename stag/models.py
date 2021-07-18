@@ -8,22 +8,17 @@ class StagModel(torch.nn.Module):
         self,
         layers: List[StagLayer],
         likelihood: Likelihood=CategoricalLikelihood(),
-        pool: Union[None, Callable]=None,
         kl_scaling=1.0
     ):
         super(StagModel, self).__init__()
         self.layers = layers
         self.likelihood = likelihood
-        self.pool = pool
         self.kl_scaling = kl_scaling
 
     def _forward(self, graph, feat):
         _graph = graph.local_var()
         for layer in self.layers:
-            feat = layer(graph, feat)
-        if self.pool is not None:
-            g.ndata['h'] = feat
-            feat = self.pool(g, 'h')
+            feat = layer(_graph, feat)
         return feat
 
     def forward(self, graph, feat, n_samples=1, return_parameters=False):
