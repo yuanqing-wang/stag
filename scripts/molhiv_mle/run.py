@@ -3,17 +3,18 @@ import dgl
 import stag
 
 def run(args):
-    from ogb.graphproppred import DglGraphPropPredDataset, collate_dgl
+    from ogb.graphproppred import DglGraphPropPredDataset, Evaluator, collate_dgl
     from torch.utils.data import DataLoader
 
     dataset = DglGraphPropPredDataset(name="ogbg-molhiv")
+    evaluator = Evaluator(name="ogbg-molhiv")
     in_features = 9
     out_features = 1
 
     split_idx = dataset.get_idx_split()
     train_loader = DataLoader(dataset[split_idx["train"]], batch_size=32, shuffle=True, collate_fn=collate_dgl)
-    valid_loader = DataLoader(dataset[split_idx["valid"]], batch_size=32, shuffle=False, collate_fn=collate_dgl)
-    test_loader = DataLoader(dataset[split_idx["test"]], batch_size=32, shuffle=False, collate_fn=collate_dgl)
+    valid_loader = DataLoader(dataset[split_idx["valid"]], batch_size=len(split_idx["valid"]), shuffle=False, collate_fn=collate_dgl)
+    test_loader = DataLoader(dataset[split_idx["test"]], batch_size=len(split_idx["test"]), shuffle=False, collate_fn=collate_dgl)
 
     layers = torch.nn.ModuleList()
     layers.append(
@@ -21,6 +22,7 @@ def run(args):
             dgl.nn.GraphConv(
                 in_features,
                 args.hidden_features,
+                allow_zero_in_degree=True,
                 activation=torch.nn.functional.relu,
             ),
             edge_weight_distribution=torch.distributions.Normal(1.0, args.std),
@@ -39,6 +41,7 @@ def run(args):
                 dgl.nn.GraphConv(
                     args.hidden_features,
                     args.hidden_features,
+                    allow_zero_in_degree=True,
                     activation=torch.nn.functional.relu,
                 ),
                 edge_weight_distribution=torch.distributions.Normal(1.0, args.std),
@@ -56,6 +59,7 @@ def run(args):
             dgl.nn.GraphConv(
                 args.hidden_features,
                 args.hidden_features,
+                allow_zero_in_degree=True,
             ),
             edge_weight_distribution=torch.distributions.Normal(1.0, args.std),
         )
@@ -65,15 +69,15 @@ def run(args):
         stag.layers.SumNodes(),
     )
 
-    # layers.append(
-    #     stag.layers.FeatOnlyLayer(
-    #         torch.nn.Sequential(
-    #             torch.nn.Linear(args.hidden_features, args.hidden_features),
-    #             torch.nn.ReLU(),
-    #             torch.nn.Linear(args.hidden_features, out_features),
-    #         )
-    #     )
-    # )
+    layers.append(
+        stag.layers.FeatOnlyLayer(
+            torch.nn.Sequential(
+                torch.nn.Linear(args.hidden_features, args.hidden_features),
+                torch.nn.ReLU(),
+                torch.nn.Linear(args.hidden_features, out_features),
+            )
+        )
+    )
 
     model = stag.models.StagModel(
         layers=layers,
@@ -92,33 +96,46 @@ def run(args):
         for g, y in train_loader:
             optimizer.zero_grad()
             y_hat = model.forward(g, g.ndata["feat"], n_samples=1, return_parameters=True)
+            loss = torch.nn.BCELoss()(
+                input=y_hat.sigmoid(),
+                target=y.float(),
+            )
             loss.backward()
             optimizer.step()
 
         model.eval()
         with torch.no_grad():
-            loss_vl = model.loss(
-                g, g.ndata['feat'], y=g.ndata['label'], mask=g.ndata["val_mask"],
-                n_samples=args.n_samples,
+            g, y = next(iter(valid_loader))
+            y_hat = model.forward(g, g.ndata["feat"], n_samples=1, return_parameters=True)
+            loss = torch.nn.BCELoss()(
+                input=y_hat.sigmoid(),
+                target=y.float(),
             )
+            print(loss)
+            if early_stopping(loss): break
 
-            if early_stopping(loss_vl): break
+    g, y = next(iter(valid_loader))
+    rocauc_vl = evaluator.eval(
+        {
+            "y_true": y,
+            "y_pred": model.forward(g, g.ndata["feat"], n_samples=1, return_parameters=True)
+        }
+    )["rocauc"]
 
-    y_hat = model.forward(g, g.ndata["feat"], n_samples=args.n_samples, return_parameters=True).argmax(dim=-1)[g.ndata["val_mask"]]
-    y = g.ndata["label"][g.ndata["val_mask"]]
-    accuracy_vl = float((y_hat == y).sum()) / len(y_hat)
-
-    y_hat = model.forward(g, g.ndata["feat"], n_samples=args.n_samples, return_parameters=True).argmax(dim=-1)[g.ndata["test_mask"]]
-    y = g.ndata["label"][g.ndata["test_mask"]]
-    accuracy_te = float((y_hat == y).sum()) / len(y_hat)
-
+    g, y = next(iter(test_loader))
+    rocauc_te = evaluator.eval(
+        {
+            "y_true": y,
+            "y_pred": model.forward(g, g.ndata["feat"], n_samples=1, return_parameters=True)
+        }
+    )["rocauc"]
 
     import pandas as pd
     df = pd.DataFrame(
         {
             args.data: {
-                "accuracy_te": accuracy_te,
-                "accuracy_vl": accuracy_vl,
+                "rocauc_te": rocauc_te,
+                "rocauc_vl": rocauc_vl,
             }
         }
     )

@@ -134,9 +134,7 @@ class SumNodes(torch.nn.Module):
     def forward(self, graph, feat):
         graph = graph.local_var()
         graph.ndata[self.name] = feat
-        print("batch_size, ", graph.batch_size)
         feat = dgl.sum_nodes(graph, self.name)
-        print(feat.shape)
         return feat
 
 class StagMeanFieldVariationalInferenceLayer(StagLayer):
