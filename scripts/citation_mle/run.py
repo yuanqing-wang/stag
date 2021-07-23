@@ -15,16 +15,10 @@ def run(args):
             dgl.nn.GraphConv(
                 in_features,
                 args.hidden_features,
-                activation=torch.nn.functional.relu,
+                activation=torch.nn.functional.elu,
             ),
             edge_weight_distribution=torch.distributions.Normal(1.0, args.std),
         )
-    )
-
-    layers.append(
-        stag.layers.FeatOnlyLayer(
-            torch.nn.Dropout(),
-        ),
     )
 
     for idx in range(1, args.depth-1):
@@ -33,15 +27,9 @@ def run(args):
                 dgl.nn.GraphConv(
                     args.hidden_features,
                     args.hidden_features,
-                    activation=torch.nn.functional.relu,
+                    activation=torch.nn.functional.elu,
                 ),
                 edge_weight_distribution=torch.distributions.Normal(1.0, args.std),
-            ),
-        )
-
-        layers.append(
-            stag.layers.FeatOnlyLayer(
-                torch.nn.Dropout(),
             ),
         )
 
@@ -63,18 +51,18 @@ def run(args):
     print(model)
 
     if torch.cuda.is_available():
-        model = model.to("cuda:0")
+        model = model.cuda()# .to("cuda:0")
         g = g.to("cuda:0")
 
-    optimizer = torch.optim.Adam(model.parameters(), args.learning_rate, weight_decay=5e-4)
+    optimizer = torch.optim.Adam(model.parameters(), args.learning_rate, weight_decay=args.weight_decay)
     from stag.utils import EarlyStopping
     early_stopping = EarlyStopping(patience=10)
 
     for idx_epoch in range(args.n_epochs):
         model.train()
         optimizer.zero_grad()
-        y_hat = model.forward(g, g.ndata["feat"], n_samples=1, return_parameters=True)[g.ndata["train_mask"]]
-        loss = torch.nn.functional.nll_loss(input=y_hat.log(), target=g.ndata["label"][g.ndata["train_mask"]])
+        y_hat = model.forward(g, g.ndata["feat"], n_samples=args.n_samples, return_parameters=True)[g.ndata["train_mask"]]
+        loss = model.loss(g, g.ndata["feat"], g.ndata["label"], mask=g.ndata["train_mask"], n_samples=args.n_samples)
         loss.backward()
         optimizer.step()
 
@@ -119,5 +107,6 @@ if __name__ == "__main__":
     parser.add_argument("--out", type=str, default="out")
     parser.add_argument("--std", type=float, default=1.0)
     parser.add_argument("--n_samples", type=int, default=4)
+    parser.add_argument("--weight_decay", type=float, default=0.0)
     args=parser.parse_args()
     run(args)

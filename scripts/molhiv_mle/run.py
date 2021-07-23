@@ -23,7 +23,6 @@ def run(args):
                 in_features,
                 args.hidden_features,
                 allow_zero_in_degree=True,
-                activation=torch.nn.functional.relu,
             ),
             edge_weight_distribution=torch.distributions.Normal(1.0, args.std),
         )
@@ -31,7 +30,7 @@ def run(args):
 
     layers.append(
         stag.layers.FeatOnlyLayer(
-            torch.nn.Dropout(),
+            torch.nn.ReLU(),
         ),
     )
 
@@ -42,7 +41,6 @@ def run(args):
                     args.hidden_features,
                     args.hidden_features,
                     allow_zero_in_degree=True,
-                    activation=torch.nn.functional.relu,
                 ),
                 edge_weight_distribution=torch.distributions.Normal(1.0, args.std),
             ),
@@ -50,7 +48,7 @@ def run(args):
 
         layers.append(
             stag.layers.FeatOnlyLayer(
-                torch.nn.Dropout(),
+                torch.nn.ReLU(),
             ),
         )
 
@@ -75,6 +73,7 @@ def run(args):
                 torch.nn.Linear(args.hidden_features, args.hidden_features),
                 torch.nn.ReLU(),
                 torch.nn.Linear(args.hidden_features, out_features),
+                torch.nn.Sigmoid(),
             )
         )
     )
@@ -84,21 +83,22 @@ def run(args):
     )
 
     if torch.cuda.is_available():
-        model = model.to("cuda:0")
-        g = g.to("cuda:0")
+        model = model.cuda()
 
-    optimizer = torch.optim.Adam(model.parameters(), args.learning_rate, weight_decay=5e-4)
+    optimizer = torch.optim.Adam(model.parameters(), args.learning_rate, weight_decay=args.weight_decay)
     from stag.utils import EarlyStopping
     early_stopping = EarlyStopping(patience=10)
 
     for idx_epoch in range(args.n_epochs):
         model.train()
         for g, y in train_loader:
+            if torch.cuda.is_available():
+                g = g.to("cuda:0")
             optimizer.zero_grad()
-            y_hat = model.forward(g, g.ndata["feat"], n_samples=1, return_parameters=True)
+            y_hat = model.forward(g, g.ndata["feat"], n_samples=4, return_parameters=True)
             loss = torch.nn.BCELoss()(
-                input=y_hat.sigmoid(),
-                target=y.float(),
+                input=y_hat,
+                target=y.float().cuda(),
             )
             loss.backward()
             optimizer.step()
@@ -106,19 +106,22 @@ def run(args):
         model.eval()
         with torch.no_grad():
             g, y = next(iter(valid_loader))
-            y_hat = model.forward(g, g.ndata["feat"], n_samples=1, return_parameters=True)
+            if torch.cuda.is_available():
+                g = g.to("cuda:0")
+            y_hat = model.forward(g, g.ndata["feat"], n_samples=4, return_parameters=True)
             loss = torch.nn.BCELoss()(
-                input=y_hat.sigmoid(),
-                target=y.float(),
+                input=y_hat,
+                target=y.float().cuda(),
             )
             print(loss)
             if early_stopping(loss): break
 
+    model = model.cpu()
     g, y = next(iter(valid_loader))
     rocauc_vl = evaluator.eval(
         {
             "y_true": y,
-            "y_pred": model.forward(g, g.ndata["feat"], n_samples=1, return_parameters=True)
+            "y_pred": model.forward(g, g.ndata["feat"], n_samples=4, return_parameters=True)
         }
     )["rocauc"]
 
@@ -126,7 +129,7 @@ def run(args):
     rocauc_te = evaluator.eval(
         {
             "y_true": y,
-            "y_pred": model.forward(g, g.ndata["feat"], n_samples=1, return_parameters=True)
+            "y_pred": model.forward(g, g.ndata["feat"], n_samples=4, return_parameters=True)
         }
     )["rocauc"]
 
@@ -145,6 +148,7 @@ def run(args):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
+    parser.add_argument("--weight_decay", type=float, default=0.0)
     parser.add_argument("--data", type=str, default="cora")
     parser.add_argument("--hidden_features", type=int, default=16)
     parser.add_argument("--depth", type=int, default=3)
