@@ -3,6 +3,36 @@ import torch
 import dgl
 from typing import Union
 
+
+def _in_norm(graph, edge_weight_sample):
+    graph = graph.local_var()
+    # put weight into edges to normalize
+    graph.edata["_a"] = edge_weight_sample
+    graph.update_all(
+        dgl.function.copy_src("h_a", "m_a"),
+        dgl.function.sum("m_a", "h_a"),
+    )
+
+    # (n_nodes, )
+    current_sum = graph.ndata["h_a"]
+
+    # (n_nodes, )
+    desired_sum = graph.in_degrees()
+
+    # (n_nodes, )
+    node_scaling = torch.where(
+        torch.ne(current_sum, 0.0),
+        desired_sum / current_sum,
+        0.0,
+    )
+    graph.ndata["s"] = node_scaling
+
+    # put scaling back to edges
+    graph.apply_edges(lambda edges: {"s": edges.dst["s"]})
+    edge_scaling = graph.edata["s"]
+    edge_weight_sample *= edge_scaling
+    return edge_weight_sample
+
 class StagLayer(torch.nn.Module):
     """ Make a DGL Graph Conv Layer stochastic.
 
@@ -58,11 +88,18 @@ class StagLayer(torch.nn.Module):
             }
         )
 
-    def forward(self, graph, feat):
+    def forward(self, graph, feat, norm=False):
         """ Forward pass. """
+        graph = graph.local_var()
         # rsample noise
         edge_weight_sample = self.rsample_noise(graph, feat)
         self._edge_weight_sample = edge_weight_sample
+
+        # normalize so that for each node the sum of in_degrees are the same
+        if norm:
+            edge_weight_sample = _in_norm(
+                graph, edge_weight_sample,
+            )
 
         return self.base_layer.forward(
             graph=graph,
