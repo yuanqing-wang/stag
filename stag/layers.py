@@ -245,3 +245,38 @@ class StagMeanFieldVariationalInferenceLayer(StagLayer):
         kl_divergence = self.q_a.log_prob(edge_weight_sample).sum()\
             - self.p_a.log_prob(edge_weight_sample).sum()
         return kl_divergence
+
+class StagInductiveMeanFieldVariationalInferenceLayer(StagLayer):
+    """ Variational Inference layer with STAG.
+
+    Parameters
+    ----------
+    base_layer : torch.nn.Module
+        The basic DGL graph conv layer.
+
+    p_a : torch.distributions.Distribution
+        Prior.
+
+    q_a_mu_init : Union[float, torch.Tensor, torch.distributions.Distribution]
+        Initial mu for variational posterior.
+
+    q_a_log_sigma_init : Union[
+            float, torch.Tensor, torch.distributions.Distribution]
+        Initial log_sigma for variational posterior.
+
+    Methods
+    -------
+    kl_divergence(edge_weight_sample=None)
+        Compute KL divergence based on a sample of edge weight.
+
+    """
+    def __init__(
+            self,
+            base_layer: torch.nn.Module,
+            p_a: torch.distributions.Distribution\
+                =torch.distributions.Normal(1.0, 1.0),
+            q_a_layer: torch.nn.Module=,
+        ):
+        super(StagInductiveMeanFieldVariationalInferenceLayer, self).__init__(
+            base_layer=base_layer,
+        )
