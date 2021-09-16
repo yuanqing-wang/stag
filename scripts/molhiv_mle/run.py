@@ -12,7 +12,7 @@ def run(args):
     out_features = 1
 
     split_idx = dataset.get_idx_split()
-    train_loader = DataLoader(dataset[split_idx["train"]], batch_size=32, shuffle=True, collate_fn=collate_dgl)
+    train_loader = DataLoader(dataset[split_idx["train"]], batch_size=128, drop_last=True, shuffle=True, collate_fn=collate_dgl)
     valid_loader = DataLoader(dataset[split_idx["valid"]], batch_size=len(split_idx["valid"]), shuffle=False, collate_fn=collate_dgl)
     test_loader = DataLoader(dataset[split_idx["test"]], batch_size=len(split_idx["test"]), shuffle=False, collate_fn=collate_dgl)
 
@@ -26,6 +26,12 @@ def run(args):
             ),
             edge_weight_distribution=torch.distributions.Normal(1.0, args.std),
         )
+    )
+
+    layers.append(
+        stag.layers.FeatOnlyLayer(
+            torch.nn.BatchNorm1d(args.hidden_features),
+        ),
     )
 
     layers.append(
@@ -48,6 +54,12 @@ def run(args):
 
         layers.append(
             stag.layers.FeatOnlyLayer(
+                torch.nn.BatchNorm1d(args.hidden_features),
+            ),
+        )
+
+        layers.append(
+            stag.layers.FeatOnlyLayer(
                 torch.nn.ReLU(),
             ),
         )
@@ -64,6 +76,12 @@ def run(args):
     )
 
     layers.append(
+        stag.layers.FeatOnlyLayer(
+            torch.nn.BatchNorm1d(args.hidden_features),
+        ),
+    )
+
+    layers.append(
         stag.layers.SumNodes(),
     )
 
@@ -71,6 +89,7 @@ def run(args):
         stag.layers.FeatOnlyLayer(
             torch.nn.Sequential(
                 torch.nn.Linear(args.hidden_features, args.hidden_features),
+                torch.nn.BatchNorm1d(args.hidden_features),
                 torch.nn.ReLU(),
                 torch.nn.Linear(args.hidden_features, out_features),
                 torch.nn.Sigmoid(),
@@ -86,16 +105,16 @@ def run(args):
         model = model.cuda()
 
     optimizer = torch.optim.Adam(model.parameters(), args.learning_rate, weight_decay=args.weight_decay)
-    from stag.utils import EarlyStopping
-    early_stopping = EarlyStopping(patience=10)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min", factor=0.5, patience=20)
 
     for idx_epoch in range(args.n_epochs):
+        print(idx_epoch, flush=True)
         model.train()
         for g, y in train_loader:
             if torch.cuda.is_available():
                 g = g.to("cuda:0")
             optimizer.zero_grad()
-            y_hat = model.forward(g, g.ndata["feat"], n_samples=4, return_parameters=True)
+            y_hat = model.forward(g, g.ndata["feat"], n_samples=1, return_parameters=True)
             loss = torch.nn.BCELoss()(
                 input=y_hat,
                 target=y.float().cuda(),
@@ -108,13 +127,17 @@ def run(args):
             g, y = next(iter(valid_loader))
             if torch.cuda.is_available():
                 g = g.to("cuda:0")
-            y_hat = model.forward(g, g.ndata["feat"], n_samples=4, return_parameters=True)
+            y_hat = model.forward(g, g.ndata["feat"], n_samples=1, return_parameters=True)
             loss = torch.nn.BCELoss()(
                 input=y_hat,
                 target=y.float().cuda(),
             )
-            print(loss)
-            if early_stopping(loss): break
+            scheduler.step(loss)
+
+
+        if optimizer.param_groups[0]["lr"] <= 0.01 * args.learning_rate: break
+
+
 
     model = model.cpu()
     g, y = next(iter(valid_loader))
