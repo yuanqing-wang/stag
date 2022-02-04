@@ -50,7 +50,7 @@ class StagModel(torch.nn.Module):
             nll = nll.mean()
             reg = 0.0
             for layer in self.layers:
-                if hasattr(layer, "kl_divergence"):
+                if layer.vi:
                     reg += layer.kl_divergence()
             loss += nll + kl_scaling * reg
         return loss / n_samples

@@ -73,6 +73,7 @@ class StagLayer(torch.nn.Module):
         self.p_a = p_a
         self.norm = norm
         self.relu = relu
+        self.vi = vi
 
     def forward(self, graph, feat):
         """ Forward pass. """
@@ -140,6 +141,9 @@ class StagLayer(torch.nn.Module):
             self,
             edge_weight_sample: Union[torch.Tensor, None]=None
         ):
+        if not self.vi:
+            return 0.0
+
         if edge_weight_sample is None:
             edge_weight_sample = self._edge_weight_sample
 
