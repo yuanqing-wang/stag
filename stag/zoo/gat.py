@@ -5,6 +5,10 @@ from dgl.nn.functional import edge_softmax
 from dgl.base import DGLError
 
 class GAT(dgl.nn.GATConv):
+    def __init__(self, *args, last=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.last = last
+
     def forward(self, graph, feat, get_attention=False, edge_weight=None):
         r"""
 
@@ -116,6 +120,11 @@ class GAT(dgl.nn.GATConv):
             # activation
             if self.activation:
                 rst = self.activation(rst)
+
+            if self.last:
+                rst = rst.flatten(-2, -1)
+            else:
+                rst = rst.mean(-2)
 
             if get_attention:
                 return rst, graph.edata['a']
