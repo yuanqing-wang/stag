@@ -1,4 +1,4 @@
-import pytorch
+import torch
 import dgl
 from functools import partial
 
