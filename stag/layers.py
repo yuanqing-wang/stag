@@ -65,9 +65,9 @@ class StagLayer(torch.nn.Module):
         self.base_layer = base_layer
 
         if isinstance(q_a, torch.distributions.Distribution):
-            q_a = ParametrizedDistribution(q_a, vi=False)
+            q_a = ParametrizedDistribution(q_a, vi=vi)
         if isinstance(p_a, torch.distributions.Distribution):
-            p_a = ParametrizedDistribution(p_a, vi=False)
+            p_a = ParametrizedDistribution(p_a, vi=vi)
 
         self.q_a = q_a
         self.p_a = p_a
@@ -100,7 +100,6 @@ class StagLayer(torch.nn.Module):
 
     def rsample_noise(self, graph, feat):
         batch_shape = self.q_a.batch_shape
-        print(batch_shape, feat.shape, graph.number_of_edges)
 
         if batch_shape == torch.Size([]):
             edge_weight_sample = self._rsample_noise_r1(graph, feat)
