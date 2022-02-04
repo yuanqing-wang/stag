@@ -7,9 +7,9 @@ from typing import Union
 def _in_norm(graph, edge_weight_sample):
     graph = graph.local_var()
     # put weight into edges to normalize
-    graph.edata["_a"] = edge_weight_sample
+    graph.edata["h_a"] = edge_weight_sample
     graph.update_all(
-        dgl.function.copy_src("h_a", "m_a"),
+        dgl.function.copy_edge("h_a", "m_a"),
         dgl.function.sum("m_a", "h_a"),
     )
 
@@ -17,14 +17,15 @@ def _in_norm(graph, edge_weight_sample):
     current_sum = graph.ndata["h_a"]
 
     # (n_nodes, )
-    desired_sum = graph.in_degrees()
+    desired_sum = graph.in_degrees().unsqueeze(-1)
 
     # (n_nodes, )
     node_scaling = torch.where(
         torch.ne(current_sum, 0.0),
         desired_sum / current_sum,
-        0.0,
+        torch.zeros_like(current_sum),
     )
+
     graph.ndata["s"] = node_scaling
 
     # put scaling back to edges
@@ -55,6 +56,8 @@ class StagLayer(torch.nn.Module):
         base_layer: torch.nn.Module,
         edge_weight_distribution: \
         torch.distributions.Distribution=torch.distributions.Normal(1.0, 1.0),
+        norm: bool=False,
+        relu: bool=False,
     ) -> None:
         super(StagLayer, self).__init__()
 
@@ -79,6 +82,9 @@ class StagLayer(torch.nn.Module):
         self.edge_weight_distribution_instance = edge_weight_distribution.__class__
         self.edge_weight_distribution_parameters = edge_weight_distribution_parameters
 
+        self.norm = norm
+        self.relu = relu
+
     @property
     def edge_weight_distribution(self):
         return self.edge_weight_distribution_instance(
@@ -88,15 +94,19 @@ class StagLayer(torch.nn.Module):
             }
         )
 
-    def forward(self, graph, feat, norm=False):
+    def forward(self, graph, feat):
         """ Forward pass. """
         graph = graph.local_var()
         # rsample noise
         edge_weight_sample = self.rsample_noise(graph, feat)
+
+        if self.relu:
+            edge_weight_sample = edge_weight_sample.relu()
+
         self._edge_weight_sample = edge_weight_sample
 
         # normalize so that for each node the sum of in_degrees are the same
-        if norm:
+        if self.norm:
             edge_weight_sample = _in_norm(
                 graph, edge_weight_sample,
             )
@@ -275,7 +285,6 @@ class StagInductiveMeanFieldVariationalInferenceLayer(StagLayer):
             base_layer: torch.nn.Module,
             p_a: torch.distributions.Distribution\
                 =torch.distributions.Normal(1.0, 1.0),
-            q_a_layer: torch.nn.Module=,
         ):
         super(StagInductiveMeanFieldVariationalInferenceLayer, self).__init__(
             base_layer=base_layer,

@@ -47,7 +47,7 @@ class StagModel(torch.nn.Module):
             nll = -self.likelihood.log_prob(_feat, y)
             if mask is not None:
                 nll = nll[mask]
-            nll = nll.mean()# .sum()
+            nll = nll.mean()
             reg = 0.0
             for layer in self.layers:
                 if hasattr(layer, "kl_divergence"):
