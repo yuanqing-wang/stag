@@ -258,7 +258,7 @@ class StagMeanFieldVariationalInferenceLayer(StagLayer):
 
         kl_divergence = self.q_a.log_prob(edge_weight_sample).mean()\
             - self.p_a.log_prob(edge_weight_sample).mean()
-
+        
         return kl_divergence
 
 class StagInductiveMeanFieldVariationalInferenceLayer(StagLayer):
