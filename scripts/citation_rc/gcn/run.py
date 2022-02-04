@@ -72,7 +72,6 @@ def run(args):
         layers=layers,
     )
 
-    print(model)
 
     if torch.cuda.is_available():
         model = model.cuda()# .to("cuda:0")
@@ -89,8 +88,6 @@ def run(args):
         loss = model.loss(g, g.ndata["feat"], y=g.ndata["label"], mask=g.ndata["train_mask"], n_samples=args.n_samples_training)
         loss.backward()
         optimizer.step()
-
-        print(model.layers[0].q_a_mu.item(), model.layers[0].q_a_log_sigma.item())
 
         model.eval()
         with torch.no_grad():
