@@ -219,9 +219,13 @@ class StagMeanFieldVariationalInferenceLayer(StagLayer):
             q_a_log_sigma_init: Union[
                     float, torch.Tensor, torch.distributions.Distribution
                 ]=math.log(1.0),
+            norm: bool=False,
+            relu: bool=False,
         ):
         super(StagMeanFieldVariationalInferenceLayer, self).__init__(
             base_layer=base_layer,
+            norm=norm,
+            relu=relu,
         )
         if isinstance(q_a_mu_init, torch.distributions.Distribution):
             q_a_mu_init = q_a_mu_init.sample()
