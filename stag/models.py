@@ -41,7 +41,6 @@ class StagModel(torch.nn.Module):
 
     def loss(self, graph, feat, y, mask=None, n_samples=1, kl_scaling=None):
         if kl_scaling is None: kl_scaling = self.kl_scaling
-        loss = 0.0
         for _ in range(n_samples):
             _feat = self._forward(graph, feat)
             nll = -self.likelihood.log_prob(_feat, y)
@@ -51,6 +50,6 @@ class StagModel(torch.nn.Module):
             reg = 0.0
             for layer in self.layers:
                 if layer.vi:
-                    reg += layer.kl_divergence()
-            loss += nll + kl_scaling * reg
+                    reg = reg + layer.kl_divergence()
+            loss = nll + kl_scaling * reg
         return loss / n_samples

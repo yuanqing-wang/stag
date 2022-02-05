@@ -83,14 +83,14 @@ class StagLayer(torch.nn.Module):
 
         if self.relu:
             edge_weight_sample = edge_weight_sample.relu()
-
-        self._edge_weight_sample = edge_weight_sample
-
+        
         # normalize so that for each node the sum of in_degrees are the same
         if self.norm:
             edge_weight_sample = _in_norm(
                 graph, edge_weight_sample,
             )
+
+        self._edge_weight_sample = edge_weight_sample
 
         return self.base_layer.forward(
             graph=graph,
@@ -136,18 +136,21 @@ class StagLayer(torch.nn.Module):
         """ Sample from a distribution on $\mathbb{R}^{E \times C}$. """
         return self.q_a.rsample()
 
-    def kl_divergence(
-            self,
-            edge_weight_sample: Union[torch.Tensor, None]=None
-        ):
+    def kl_divergence(self):
         if not self.vi:
             return 0.0
+        
+        # edge_weight_sample = self._edge_weight_sample
 
-        if edge_weight_sample is None:
-            edge_weight_sample = self._edge_weight_sample
+        # kl_divergence = self.q_a.log_prob(edge_weight_sample).mean()\
+        #    - self.p_a.log_prob(edge_weight_sample).mean()
 
-        kl_divergence = self.q_a.log_prob(edge_weight_sample).mean()\
-            - self.p_a.log_prob(edge_weight_sample).mean()
+        kl_divergence = torch.distributions.kl_divergence(
+            self.q_a.base_distribution, 
+            self.p_a.base_distribution,
+        )
+
+        print(kl_divergence)
 
         return kl_divergence
 
