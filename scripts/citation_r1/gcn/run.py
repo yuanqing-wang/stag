@@ -33,7 +33,7 @@ def run(args):
     layers = torch.nn.ModuleList()
     layers.append(
         stag.layers.StagLayer(
-            dgl.nn.GraphConv(
+            stag.zoo.GCN(
                 in_features,
                 args.hidden_features,
                 activation=torch.nn.functional.relu,
@@ -47,7 +47,7 @@ def run(args):
     for idx in range(1, args.depth-1):
         layers.append(
             stag.layers.StagLayer(
-                dgl.nn.GraphConv(
+                stag.zoo.GCN(
                     args.hidden_features,
                     args.hidden_features,
                     activation=torch.nn.functional.relu,
@@ -60,7 +60,7 @@ def run(args):
 
     layers.append(
         stag.layers.StagLayer(
-            dgl.nn.GraphConv(
+            stag.zoo.GCN(
                 args.hidden_features,
                 out_features,
                 activation=lambda x: torch.nn.functional.softmax(x, dim=-1),
@@ -89,9 +89,9 @@ def run(args):
     for idx_epoch in range(args.n_epochs):
         model.train()
         optimizer.zero_grad()
-        
+
         loss = model.loss(g, g.ndata["feat"], y=g.ndata["label"], mask=g.ndata["train_mask"], n_samples=args.n_samples_training)
-        
+
         print(model.layers[0].q_a)
 
         # y_hat = model.forward(g, g.ndata["feat"], return_parameters=True)[g.ndata["train_mask"]]
@@ -110,7 +110,7 @@ def run(args):
             # y_hat = model.forward(g, g.ndata["feat"], return_parameters=True)[g.ndata["val_mask"]]
             # y = g.ndata["label"][g.ndata["val_mask"]]
             # loss_vl = torch.nn.CrossEntropyLoss()(y_hat, y)
-     
+
             losses.append(loss_vl.item())
 
             scheduler.step(loss_vl)
@@ -125,7 +125,7 @@ def run(args):
     y = g.ndata["label"][g.ndata["test_mask"]]
     accuracy_te = float((y_hat == y).sum()) / len(y_hat)
 
-    
+
     performance = {"accuracy_te": accuracy_te, "accuracy_vl": accuracy_vl}
     import json
     with open(args.out + ".json", "w") as file_handle:
