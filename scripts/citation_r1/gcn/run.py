@@ -30,6 +30,8 @@ def run(args):
         p=1,
     )
 
+    kl_scaling = g.number_of_edges() * g.ndata["train_mask"].sum() / g.ndata["train_mask"].shape[0]
+
     layers = torch.nn.ModuleList()
     layers.append(
         stag.layers.StagLayer(
@@ -73,10 +75,8 @@ def run(args):
 
     model = stag.models.StagModel(
         layers=layers,
-        kl_scaling=args.kl_scaling,
+        kl_scaling=kl_scaling,
     )
-
-    print(model)
 
     if torch.cuda.is_available():
         model = model.cuda()# .to("cuda:0")
@@ -106,6 +106,7 @@ def run(args):
             loss_vl = model.loss(
                  g, g.ndata['feat'], y=g.ndata['label'], mask=g.ndata["val_mask"],
                  n_samples=args.n_samples,
+                 kl_scaling=0.0,
             )
             # y_hat = model.forward(g, g.ndata["feat"], return_parameters=True)[g.ndata["val_mask"]]
             # y = g.ndata["label"][g.ndata["val_mask"]]
