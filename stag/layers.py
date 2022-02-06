@@ -56,7 +56,7 @@ class StagLayer(torch.nn.Module):
         self,
         base_layer: torch.nn.Module,
         q_a: Union[Distribution, torch.distributions.Distribution]=torch.distributions.Normal(1.0, 1.0),
-        p_a: Union[Distribution, torch.distributions.Distribution]=torch.distributions.Normal(1.0, 1.0),
+        p_a: Union[None, Distribution, torch.distributions.Distribution]=torch.distributions.Normal(1.0, 1.0),
         norm: bool=False,
         relu: bool=False,
         vi: bool=False,
@@ -68,6 +68,8 @@ class StagLayer(torch.nn.Module):
             q_a = ParametrizedDistribution(q_a, vi=vi)
         if isinstance(p_a, torch.distributions.Distribution):
             p_a = ParametrizedDistribution(p_a, vi=vi)
+        elif p_a is None:
+            p_a = ParametrizedDistribution(q_a, vi=vi)
 
         self.q_a = q_a
         self.p_a = p_a
