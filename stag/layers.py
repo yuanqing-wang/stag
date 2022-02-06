@@ -83,7 +83,7 @@ class StagLayer(torch.nn.Module):
 
         if self.relu:
             edge_weight_sample = edge_weight_sample.relu()
-        
+
         # normalize so that for each node the sum of in_degrees are the same
         if self.norm:
             edge_weight_sample = _in_norm(
@@ -139,18 +139,16 @@ class StagLayer(torch.nn.Module):
     def kl_divergence(self):
         if not self.vi:
             return 0.0
-        
+
         # edge_weight_sample = self._edge_weight_sample
 
         # kl_divergence = self.q_a.log_prob(edge_weight_sample).mean()\
         #    - self.p_a.log_prob(edge_weight_sample).mean()
 
         kl_divergence = torch.distributions.kl_divergence(
-            self.q_a.base_distribution, 
+            self.q_a.base_distribution,
             self.p_a.base_distribution,
         )
-
-        print(kl_divergence)
 
         return kl_divergence
 
