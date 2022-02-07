@@ -1,6 +1,6 @@
 import torch
-import math
 from torch.distributions import constraints
+from typing import Union, Callable
 
 class Distribution(torch.nn.Module):
     def __init__(self):
@@ -46,6 +46,9 @@ class Distribution(torch.nn.Module):
     def __repr__(self):
          return repr(self.base_distribution)
 
+    def condition(self, *args, **kwargs):
+        return self
+
 class ParametrizedDistribution(Distribution):
     def __init__(
         self,
@@ -88,6 +91,68 @@ class ParametrizedDistribution(Distribution):
         return self.base_distribution_instance(
             **{
                 key.replace("log_", ""):getattr(self, key).exp() if "log_" in key else getattr(self, key)
+                for key in self.new_parameter_names
+            }
+        )
+
+class AmortizedDistribution(Distribution):
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        hidden_features: Union[None, int]=None,
+        activation: Callable=torch.nn.SiLU(),
+        base_distribution_class: type=torch.distributions.Normal,
+    ):
+        super().__init__()
+        if hidden_features is None:
+            hidden_features = out_features
+
+        n_parameters = len(base_distribution_class.arg_constraints)
+
+        new_parameter_names = []
+        parameter_names = list(base_distribution_class.arg_constraints.keys())
+        for parameter_name in parameter_names:
+            if base_distribution_class.arg_constraints[parameter_name] == constraints.positive:
+                new_parameter_name = "log_" + parameter_name
+                new_parameter_names.append(new_parameter_name)
+            else:
+                new_parameter_names.append(parameter_name)
+        self.new_parameter_names = new_parameter_names
+
+        self.mlp = torch.nn.Sequential(
+            torch.nn.Linear(2 * in_features, hidden_features),
+            activation,
+            torch.nn.Linear(hidden_features, out_features * n_parameters),
+        )
+
+        self.base_distribution_class = base_distribution_class
+        self.out_features = out_features
+
+    def condition(self, graph, feat):
+        graph = graph.local_var()
+        graph.ndata['h'] = feat
+
+
+        graph.apply_edges(
+            lambda edges: {'h': self.mlp(torch.cat([edges.src['h'], edges.dst['h']], dim=-1))}
+        )
+
+        parameters = graph.edata['h'].split(self.out_features, dim=-1)
+        
+        self.new_parameters = dict(
+            zip(
+                self.new_parameter_names,
+                parameters,
+            )
+        )
+        return self
+
+    @property
+    def base_distribution(self):
+        return self.base_distribution_class(
+            **{
+                key.replace("log_", ""):self.new_parameters[key].exp() if "log_" in key else self.new_parameters[key]
                 for key in self.new_parameter_names
             }
         )

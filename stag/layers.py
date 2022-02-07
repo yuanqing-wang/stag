@@ -80,6 +80,9 @@ class StagLayer(torch.nn.Module):
     def forward(self, graph, feat):
         """ Forward pass. """
         graph = graph.local_var()
+
+        self.q_a.condition(graph, feat)
+
         # rsample noise
         edge_weight_sample = self.rsample_noise(graph, feat)
 
@@ -107,7 +110,7 @@ class StagLayer(torch.nn.Module):
             edge_weight_sample = self._rsample_noise_r1(graph, feat)
         elif batch_shape == torch.Size([feat.shape[1]]):
             edge_weight_sample = self._rsample_noise_rc(graph, feat)
-        elif batch_shape == torch.Size([graph.number_of_edges()]):
+        elif batch_shape == torch.Size([graph.number_of_edges(), 1]):
             edge_weight_sample = self._rsample_noise_re(graph, feat)
         elif batch_shape == torch.Size(
             [graph.number_of_edges(), feat.shape[1]]
@@ -132,7 +135,7 @@ class StagLayer(torch.nn.Module):
         """ Sample from a distribution on $\mathbb{R}^E$. """
         return self.q_a.rsample(
             [feat.shape[1]]
-        ).transpose(1, 0)
+        ).squeeze(-1).transpose(1, 0)
 
     def _rsample_noise_rec(self, graph, feat):
         """ Sample from a distribution on $\mathbb{R}^{E \times C}$. """
