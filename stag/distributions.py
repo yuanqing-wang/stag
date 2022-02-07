@@ -67,7 +67,7 @@ class ParametrizedDistribution(Distribution):
                     setattr(
                         self,
                         "log_" + key,
-                        torch.nn.Parameter(torch.tensor(math.log(value))),
+                        torch.nn.Parameter(torch.log(torch.tensor(value))),
                     )
                     new_parameter_names.append("log_" + key)
 
