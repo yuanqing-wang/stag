@@ -120,10 +120,16 @@ class AmortizedDistribution(Distribution):
                 new_parameter_names.append(parameter_name)
         self.new_parameter_names = new_parameter_names
 
-        self.mlp = torch.nn.Sequential(
+        self.embedding_mlp = torch.nn.Sequential(
             torch.nn.Linear(2 * in_features, hidden_features),
             activation,
-            torch.nn.Linear(hidden_features, out_features * n_parameters),
+        )
+
+        self.parameters_mlp = torch.nn.ModuleDict(
+            {
+                key: torch.nn.Linear(hidden_features, out_features)
+                for key in self.new_parameter_names
+            }
         )
 
         self.base_distribution_class = base_distribution_class
@@ -135,16 +141,11 @@ class AmortizedDistribution(Distribution):
 
 
         graph.apply_edges(
-            lambda edges: {'h': self.mlp(torch.cat([edges.src['h'], edges.dst['h']], dim=-1))}
+            lambda edges: {'h': self.embedding_mlp(torch.cat([edges.src['h'], edges.dst['h']], dim=-1))},
         )
 
-        parameters = graph.edata['h'].split(self.out_features, dim=-1)
-        
         self.new_parameters = dict(
-            zip(
-                self.new_parameter_names,
-                parameters,
-            )
+            {key: self.parameters_mlp[key](graph.edata['h']) for key in self.new_parameter_names},
         )
         return self
 
