@@ -103,7 +103,7 @@ class AmortizedDistribution(Distribution):
         hidden_features: Union[None, int]=None,
         activation: Callable=torch.nn.SiLU(),
         base_distribution_class: type=torch.distributions.Normal,
-        init_like: Union[None, torch.distributions.Distribution, Distribution],
+        init_like: Union[None, torch.distributions.Distribution, Distribution]=None,
     ):
         super().__init__()
         if hidden_features is None:
@@ -146,8 +146,8 @@ class AmortizedDistribution(Distribution):
         for parameter in self.new_parameter_names:
             if "log_" in parameter:
                 torch.nn.init.constant_(
-                    self.parameters_mlp[parameter.replace("log_", "")].bias,
-                    torch.log(getattr(init_like, parameter)),
+                    self.parameters_mlp[parameter].bias,
+                    torch.log(getattr(init_like, parameter.replace("log_", ""))),
                 )
 
             else:
@@ -159,7 +159,6 @@ class AmortizedDistribution(Distribution):
     def condition(self, graph, feat):
         graph = graph.local_var()
         graph.ndata['h'] = feat
-
 
         graph.apply_edges(
             lambda edges: {'h': self.embedding_mlp(torch.cat([edges.src['h'], edges.dst['h']], dim=-1))},
