@@ -71,9 +71,7 @@ class StagLayer(torch.nn.Module):
         elif p_a is None:
             p_a = ParametrizedDistribution(q_a, vi=vi)
 
-        
         self.add_module("q_a", q_a)
-
 
         self.p_a = p_a
         self.norm = norm
@@ -85,8 +83,6 @@ class StagLayer(torch.nn.Module):
         graph = graph.local_var()
 
         self.q_a.condition(graph, feat)
-        
-        print(self.q_a.mean.mean())
 
         # rsample noise
         edge_weight_sample = self.rsample_noise(graph, feat)

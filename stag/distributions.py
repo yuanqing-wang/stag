@@ -124,6 +124,8 @@ class AmortizedDistribution(Distribution):
         self.embedding_mlp = torch.nn.Sequential(
             torch.nn.Linear(2 * in_features, hidden_features),
             activation,
+            torch.nn.Linear(hidden_features, hidden_features),
+            activation,
         )
 
         self.parameters_mlp = torch.nn.ModuleDict(
