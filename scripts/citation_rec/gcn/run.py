@@ -34,7 +34,6 @@ def run(args):
 
     p_a = torch.distributions.Normal(1.0, args.std)
 
-
     layers = torch.nn.ModuleList()
     layers.append(
         stag.layers.StagLayer(
@@ -43,7 +42,7 @@ def run(args):
                 args.hidden_features,
                 activation=torch.nn.functional.relu,
             ),
-            q_a=stag.distributions.AmortizedDistribution(in_features, in_features),
+            q_a=stag.distributions.AmortizedDistribution(in_features, in_features, init_like=p_a),
             p_a=p_a,
             vi=True,
         )
@@ -57,7 +56,7 @@ def run(args):
                     args.hidden_features,
                     activation=torch.nn.functional.relu,
                 ),
-                q_a=stag.distributions.AmortizedDistribution(args.hidden_features, args.hidden_features),
+                q_a=stag.distributions.AmortizedDistribution(args.hidden_features, args.hidden_features, init_like=p_a),
                 p_a=p_a,
                 vi=True,
             ),
@@ -70,7 +69,7 @@ def run(args):
                 out_features,
                 activation=lambda x: torch.nn.functional.softmax(x, dim=-1),
             ),
-            q_a=stag.distributions.AmortizedDistribution(args.hidden_features, args.hidden_features),
+            q_a=stag.distributions.AmortizedDistribution(args.hidden_features, args.hidden_features, init_like=p_a),
             p_a=p_a,
             vi=True,
         )
