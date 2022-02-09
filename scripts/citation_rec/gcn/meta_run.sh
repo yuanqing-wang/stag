@@ -21,7 +21,7 @@ do
                                 for kl_scaling in 1.0
                                 do
             out=$data"_"$depth"_"$hidden_features"_"$learning_rate"_"$weight_decay"_"$std"_"$repeat
-            bsub -q gpuqueue -o %J.stdout -gpu "num=1:j_exclusive=yes" -R "rusage[mem=10] span[ptile=1]" -W 0:15 python run.py\
+            bsub -q gpuqueue -o %J.stdout -gpu "num=1:j_exclusive=yes" -R "rusage[mem=2] span[ptile=1]" -W 0:15 python run.py\
                 --weight_decay $weight_decay \
                 --n_epochs 2000 \
                 --n_samples 4 \

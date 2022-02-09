@@ -106,7 +106,7 @@ def run(args):
             loss_vl = model.loss(
                  g, g.ndata['feat'], y=g.ndata['label'], mask=g.ndata["val_mask"],
                  n_samples=args.n_samples,
-                 kl_scaling=0.0,
+                 # kl_scaling=0.0,
             )
             # y_hat = model.forward(g, g.ndata["feat"], return_parameters=True)[g.ndata["val_mask"]]
             # y = g.ndata["label"][g.ndata["val_mask"]]
@@ -116,7 +116,7 @@ def run(args):
 
             scheduler.step(loss_vl)
 
-            # if optimizer.param_groups[0]["lr"] <= 0.01 * args.learning_rate: break
+            if optimizer.param_groups[0]["lr"] <= 0.0001 * args.learning_rate: break
 
     y_hat = model.forward(g, g.ndata["feat"], n_samples=args.n_samples, return_parameters=True).argmax(dim=-1)[g.ndata["val_mask"]]
     y = g.ndata["label"][g.ndata["val_mask"]]
