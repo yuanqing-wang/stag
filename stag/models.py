@@ -39,8 +39,10 @@ class StagModel(torch.nn.Module):
         y_hat = self.likelihood.condition(feat).sample()
         return y_hat
 
-    def loss(self, graph, feat, y, mask=None, n_samples=1, kl_scaling=None):
+    def loss_terms(self, graph, feat, y, mask=None, n_samples=1, kl_scaling=None):
         if kl_scaling is None: kl_scaling = self.kl_scaling
+        total_nll = 0.0
+        total_reg = 0.0
         for _ in range(n_samples):
             _feat = self._forward(graph, feat)
             nll = -self.likelihood.log_prob(_feat, y)
@@ -50,6 +52,17 @@ class StagModel(torch.nn.Module):
             reg = 0.0
             for layer in self.layers:
                 if layer.vi:
-                    reg = reg + layer.kl_divergence().mean() # .sum(dim=-1).mean()
-            loss = nll + kl_scaling * reg
-        return loss / n_samples
+                    reg = reg + layer.kl_divergence().sum(dim=-1).mean()
+            total_nll = total_nll + nll
+            total_reg = total_reg + reg
+
+        total_nll = total_nll / n_samples
+        total_reg = total_reg / n_samples
+        total_reg = total_reg * kl_scaling
+
+        return total_nll, total_reg
+
+
+    def loss(self, graph, feat, y, mask=None, n_samples=1, kl_scaling=None):
+        nll, reg = self.loss_terms(graph, feat, y, mask=mask, n_samples=n_samples, kl_scaling=kl_scaling)
+        return nll + reg
