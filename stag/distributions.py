@@ -124,8 +124,6 @@ class AmortizedDistribution(Distribution):
         self.embedding_mlp = torch.nn.Sequential(
             torch.nn.Linear(2 * in_features, hidden_features),
             activation,
-            torch.nn.Linear(hidden_features, hidden_features),
-            activation,
         )
 
         self.parameters_mlp = torch.nn.ModuleDict(
@@ -146,6 +144,11 @@ class AmortizedDistribution(Distribution):
             init_like = init_like.base_distribution
 
         for parameter in self.new_parameter_names:
+            # torch.nn.init.normal_(
+            #    self.parameters_mlp[parameter].weight,
+            #    0.0, 1e-5,
+            # )
+
             if "log_" in parameter:
                 torch.nn.init.constant_(
                     self.parameters_mlp[parameter].bias,
@@ -163,7 +166,7 @@ class AmortizedDistribution(Distribution):
         graph.ndata['h'] = feat
 
         graph.apply_edges(
-            lambda edges: {'h': self.embedding_mlp(torch.cat([edges.src['h'], edges.dst['h']], dim=-1))},
+            lambda edges: {'h': self.embedding_mlp(torch.cat([edges.src['h'], edges.dst['h']], dim=-1).detach())},
         )
 
         self.new_parameters = dict(
