@@ -1,7 +1,7 @@
 import torch
 import dgl
 import dgl.function as fn
-from dgl.nn.functional import edge_softmax
+from dgl.nn import edge_softmax
 from dgl.base import DGLError
 
 class GAT(dgl.nn.GATConv):
