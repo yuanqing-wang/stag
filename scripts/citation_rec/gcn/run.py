@@ -1,7 +1,7 @@
 import torch
 import dgl
 import stag
-torch.autograd.set_detect_anomaly(True)
+from itertools import chain
 
 def run(args):
     if args.data == "cora":
@@ -9,25 +9,28 @@ def run(args):
         g = ds[0]
         in_features = 1433
         out_features = 7
+        p = 2
 
     elif args.data == "citeseer":
         ds = dgl.data.CiteseerGraphDataset()
         g = ds[0]
         in_features = 3703
         out_features = 6
+        p = 1
 
     elif args.data == "pubmed":
         ds = dgl.data.PubmedGraphDataset()
         g = ds[0]
         in_features = 500
         out_features = 3
+        p = 1
 
     g = dgl.add_self_loop(g)
 
     g.ndata['feat'] = torch.nn.functional.normalize(
         g.ndata['feat'],
         dim=-1,
-        p=2,
+        p=p,
     )
 
     kl_scaling = g.number_of_edges() * g.ndata["train_mask"].sum() / g.ndata["train_mask"].shape[0]
@@ -84,22 +87,39 @@ def run(args):
         model = model.cuda()# .to("cuda:0")
         g = g.to("cuda:0")
 
-    optimizer = torch.optim.Adam(model.parameters(), args.learning_rate, weight_decay=args.weight_decay)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min", factor=0.5, patience=10)
+    optimizer_nn = torch.optim.Adam(
+        chain(*[layer.base_layer.parameters() for layer in model.layers]),
+        args.learning_rate,
+        weight_decay=args.weight_decay,
+    )
+
+    optimizer_qa = torch.optim.Adam(
+        chain(*[layer.q_a.parameters() for layer in model.layers]),
+        args.learning_rate,
+        weight_decay=args.weight_decay,
+    )
+
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer_nn, "min", factor=0.5, patience=10)
 
     losses = []
     for idx_epoch in range(args.n_epochs):
         model.train()
-        optimizer.zero_grad()
+        optimizer_nn.zero_grad()
+        optimizer_qa.zero_grad()
 
-        loss = model.loss(g, g.ndata["feat"], y=g.ndata["label"], mask=g.ndata["train_mask"], n_samples=args.n_samples_training)
+        nll, reg = model.loss_terms(g, g.ndata["feat"], y=g.ndata["label"], mask=g.ndata["train_mask"], n_samples=args.n_samples_training)
 
-        # y_hat = model.forward(g, g.ndata["feat"], return_parameters=True)[g.ndata["train_mask"]]
-        # y = g.ndata["label"][g.ndata["train_mask"]]
+        (nll+reg).backward(
+            inputs=list(chain(*[layer.base_layer.parameters() for layer in model.layers])),
+            retain_graph=True,
+        )
 
-        # loss = torch.nn.CrossEntropyLoss()(y_hat, y)
-        loss.backward()
-        optimizer.step()
+        reg.backward(
+            inputs=list(chain(*[layer.q_a.parameters() for layer in model.layers])),
+        )
+
+        optimizer_nn.step()
+        optimizer_qa.step()
 
         model.eval()
         with torch.no_grad():
@@ -116,7 +136,7 @@ def run(args):
 
             scheduler.step(loss_vl)
 
-            if optimizer.param_groups[0]["lr"] <= 0.0001 * args.learning_rate: break
+            if optimizer_nn.param_groups[0]["lr"] <= 0.0001 * args.learning_rate: break
 
     y_hat = model.forward(g, g.ndata["feat"], n_samples=args.n_samples, return_parameters=True).argmax(dim=-1)[g.ndata["val_mask"]]
     y = g.ndata["label"][g.ndata["val_mask"]]

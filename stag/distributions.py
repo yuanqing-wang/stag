@@ -43,9 +43,6 @@ class Distribution(torch.nn.Module):
     def entropy(self, *args, **kwargs):
         return self.base_distribution.entropy(*args, **kwargs)
 
-    def __repr__(self):
-         return repr(self.base_distribution)
-
     def condition(self, *args, **kwargs):
         return self
 
@@ -85,6 +82,9 @@ class ParametrizedDistribution(Distribution):
 
         self.base_distribution_instance = base_distribution.__class__
         self.new_parameter_names = new_parameter_names
+
+    def __repr__(self):
+         return repr(self.base_distribution)
 
     @property
     def base_distribution(self):
@@ -166,7 +166,7 @@ class AmortizedDistribution(Distribution):
         graph.ndata['h'] = feat
 
         graph.apply_edges(
-            lambda edges: {'h': self.embedding_mlp(torch.cat([edges.src['h'], edges.dst['h']], dim=-1).detach())},
+            lambda edges: {'h': self.embedding_mlp(torch.cat([edges.src['h'], edges.dst['h']], dim=-1))},
         )
 
         self.new_parameters = dict(
