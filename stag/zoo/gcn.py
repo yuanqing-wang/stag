@@ -1,7 +1,7 @@
 import torch as th
 import dgl
 import dgl.function as fn
-from dgl.nn.functional import edge_softmax
+from dgl.nn import edge_softmax
 from dgl.base import DGLError
 from dgl.utils import expand_as_pair
 
