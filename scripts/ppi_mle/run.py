@@ -82,6 +82,15 @@ def run(args):
         scheduler.step(f1)
         if optimizer.param_groups[0]["lr"] <= 0.1 * args.learning_rate: break
 
+    y_hat = model(g_te, g_te.ndata['feat'], return_parameters=True)
+    y = g_te.ndata['label']
+    y = y.detach().cpu().flatten()
+    y_hat = (y_hat.detach().cpu().flatten() > 0.5) * 1
+    f1_te = f1_score(y, y_hat)
+
+    performance = {'f1_te': f1_te, 'f1_vl': f1}
+    print(performance)
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
