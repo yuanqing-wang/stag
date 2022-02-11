@@ -28,7 +28,6 @@ def run(args):
                 activation=torch.nn.functional.relu,
             ),
             q_a=torch.distributions.Normal(1.0, args.std),
-            sample_dimension=args.hidden_features if args.model=="GAT" else None,
         )
     )
 
@@ -41,7 +40,6 @@ def run(args):
                     activation=torch.nn.functional.relu,
                 ),
                 q_a=torch.distributions.Normal(1.0, args.std),
-                sample_dimension=args.hidden_features if args.model=="GAT" else None,
             ),
         )
 
@@ -53,7 +51,6 @@ def run(args):
                 activation=torch.sigmoid,
             ),
             q_a=torch.distributions.Normal(1.0, args.std),
-            sample_dimension=out_features if args.model=="GAT" else None,
         )
     )
 
