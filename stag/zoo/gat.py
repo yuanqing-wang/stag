@@ -6,7 +6,7 @@ from dgl.base import DGLError
 
 class GAT(dgl.nn.GATConv):
     def __init__(self, *args, last=False, **kwargs):
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, num_heads=3, **kwargs)
         self.last = last
 
     def forward(self, graph, feat, get_attention=False, edge_weight=None):
@@ -102,7 +102,7 @@ class GAT(dgl.nn.GATConv):
             graph.edata['a'] = self.attn_drop(edge_softmax(graph, e))
 
             if edge_weight is not None:
-                graph.edata['a'] = graph.edata['a'] * edge_weight
+                graph.edata['a'] = graph.edata['a'] * edge_weight.unsqueeze(-2)
 
             # message passing
             graph.update_all(fn.u_mul_e('ft', 'a', 'm'),
