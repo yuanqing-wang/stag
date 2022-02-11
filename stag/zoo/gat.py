@@ -102,7 +102,12 @@ class GAT(dgl.nn.GATConv):
             graph.edata['a'] = self.attn_drop(edge_softmax(graph, e))
 
             if edge_weight is not None:
-                graph.edata['a'] = graph.edata['a'] * edge_weight.unsqueeze(-2)
+                if edge_weight.shape[-1] > 1:
+                    edge_weight = self.fc(edge_weight)
+                    edge_weight = edge_weight.view(
+                        *edge_weight.shape[:-1], self._num_heads, self._out_feats)
+
+                graph.edata['a'] = graph.edata['a'] * edge_weight
 
             # message passing
             graph.update_all(fn.u_mul_e('ft', 'a', 'm'),
