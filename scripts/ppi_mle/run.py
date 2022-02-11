@@ -16,11 +16,13 @@ def run(args):
     in_features = 50
     out_features = 121
 
+    model = getattr(stag.zoo, args.model)
+
     layers = torch.nn.ModuleList()
 
     layers.append(
         stag.layers.StagLayer(
-            stag.zoo.GCN(
+            model(
                 in_features,
                 args.hidden_features,
                 activation=torch.nn.functional.relu,
@@ -32,10 +34,10 @@ def run(args):
     for idx in range(1, args.depth-1):
         layers.append(
             stag.layers.StagLayer(
-                dgl.nn.GraphConv(
+                model(
                     args.hidden_features,
                     args.hidden_features,
-                    activation=torch.nn.functional.elu,
+                    activation=torch.nn.functional.relu,
                 ),
                 q_a=torch.distributions.Normal(1.0, args.std),
             ),
@@ -43,10 +45,10 @@ def run(args):
 
     layers.append(
         stag.layers.StagLayer(
-            stag.zoo.GCN(
+            model(
                 args.hidden_features,
                 out_features,
-                activation=torch.nn.functional.sigmoid,
+                activation=torch.sigmoid,
             ),
             q_a=torch.distributions.Normal(1.0, args.std),
         )
@@ -74,26 +76,31 @@ def run(args):
             loss.backward()
             optimizer.step()
 
-        y_hat = model(g_vl, g_vl.ndata['feat'], return_parameters=True)
+        y_hat = model(g_vl, g_vl.ndata['feat'], return_parameters=True, n_samples=args.n_samples)
         y = g_vl.ndata['label']
         y = y.detach().cpu().flatten()
         y_hat = (y_hat.detach().cpu().flatten() > 0.5) * 1
-        f1 = f1_score(y, y_hat)
+        f1 = f1_score(y, y_hat, average="micro")
+        print(f1)
         scheduler.step(f1)
         if optimizer.param_groups[0]["lr"] <= 0.1 * args.learning_rate: break
 
-    y_hat = model(g_te, g_te.ndata['feat'], return_parameters=True)
+    y_hat = model(g_te, g_te.ndata['feat'], return_parameters=True, n_samples=args.n_samples)
     y = g_te.ndata['label']
     y = y.detach().cpu().flatten()
     y_hat = (y_hat.detach().cpu().flatten() > 0.5) * 1
-    f1_te = f1_score(y, y_hat)
+    f1_te = f1_score(y, y_hat, average="micro")
 
     performance = {'f1_te': f1_te, 'f1_vl': f1}
-    print(performance)
+    import json
+    with open(args.out + ".json", "w") as file_handle:
+        json.dump(performance, file_handle)
+
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
+    parser.add_argument("--model", type=str, default="GCN")
     parser.add_argument("--hidden_features", type=int, default=256)
     parser.add_argument("--depth", type=int, default=3)
     parser.add_argument("--learning_rate", type=float, default=5e-3)
