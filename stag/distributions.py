@@ -46,6 +46,49 @@ class Distribution(torch.nn.Module):
     def condition(self, *args, **kwargs):
         return self
 
+class DeltaDistribution(Distribution):
+    def __init__(self, value=0.0):
+        super().__init__()
+        value = torch.tensor(value)
+        self.register_buffer("value", value)
+
+    @property
+    def batch_shape(self):
+        return self.value.shape
+
+    @property
+    def mean(self):
+        return self.value
+
+    @property
+    def stddev(self):
+        return torch.zeros_like(self.value)
+
+    @property
+    def variance(self):
+        return torch.zeros_like(self.value)
+
+    def expand(self, *args, **kwargs):
+        raise NotImplementedError
+
+    def rsample(self, *args, **kwargs):
+        return self.value
+
+    def sample(self, *args, **kwargs):
+        return self.value
+
+    def log_prob(self, *args, **kwargs):
+        raise NotImplementedError
+
+    def cdf(self, *args, **kwargs):
+        raise NotImplementedError
+
+    def icdf(self, *args, **kwargs):
+        raise NotImplementedError
+
+    def entropy(self, *args, **kwargs):
+        raise NotImplementedError
+
 class ParametrizedDistribution(Distribution):
     def __init__(
         self,

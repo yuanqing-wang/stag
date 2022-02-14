@@ -8,6 +8,7 @@ class GAT(dgl.nn.GATConv):
     def __init__(self, *args, last=False, **kwargs):
         super().__init__(*args, num_heads=3, **kwargs)
         self.last = last
+        self.sample_dimension = self._out_feats
 
     def forward(self, graph, feat, get_attention=False, edge_weight=None):
         r"""
@@ -102,11 +103,7 @@ class GAT(dgl.nn.GATConv):
             graph.edata['a'] = self.attn_drop(edge_softmax(graph, e))
 
             if edge_weight is not None:
-                if edge_weight.shape[-1] > 1:
-                    edge_weight = self.fc(edge_weight)
-                    edge_weight = edge_weight.view(
-                        *edge_weight.shape[:-1], self._num_heads, self._out_feats)
-
+                edge_weight = edge_weight.unsqueeze(-2)
                 graph.edata['a'] = graph.edata['a'] * edge_weight
 
             # message passing

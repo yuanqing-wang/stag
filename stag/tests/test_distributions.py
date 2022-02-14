@@ -12,3 +12,9 @@ def test_parametrized_distribution():
     base_distribution = torch.distributions.Normal(0, 1)
     distribution = ParametrizedDistribution(base_distribution)
     distribution_vi = ParametrizedDistribution(base_distribution, vi=True)
+
+def test_delta_distribution():
+    import stag
+    from stag.distributions import DeltaDistribution
+    distribution = DeltaDistribution(0.0)
+    assert distribution.sample() == 0.0

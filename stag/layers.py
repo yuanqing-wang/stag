@@ -84,8 +84,13 @@ class StagLayer(torch.nn.Module):
 
         self.q_a.condition(graph, feat)
 
+        if hasattr(self.base_layer, "sample_dimension"):
+            sample_dimension = self.base_layer.sample_dimension
+        else:
+            sample_dimension = feat.shape[-1]
+
         # rsample noise
-        edge_weight_sample = self.rsample_noise(graph, feat)
+        edge_weight_sample = self.rsample_noise(graph, sample_dimension)
 
         if self.relu:
             edge_weight_sample = edge_weight_sample.relu()
@@ -104,41 +109,41 @@ class StagLayer(torch.nn.Module):
             edge_weight=edge_weight_sample,
         )
 
-    def rsample_noise(self, graph, feat):
+    def rsample_noise(self, graph, sample_dimension):
         batch_shape = self.q_a.batch_shape
 
         if batch_shape == torch.Size([]):
-            edge_weight_sample = self._rsample_noise_r1(graph, feat)
-        elif batch_shape == torch.Size([feat.shape[1]]):
-            edge_weight_sample = self._rsample_noise_rc(graph, feat)
+            edge_weight_sample = self._rsample_noise_r1(graph, sample_dimension)
+        elif batch_shape == torch.Size([sample_dimension]):
+            edge_weight_sample = self._rsample_noise_rc(graph, sample_dimension)
         elif batch_shape == torch.Size([graph.number_of_edges(), 1]):
-            edge_weight_sample = self._rsample_noise_re(graph, feat)
+            edge_weight_sample = self._rsample_noise_re(graph, sample_dimension)
         elif batch_shape == torch.Size(
-            [graph.number_of_edges(), feat.shape[1]]
+            [graph.number_of_edges(), sample_dimension]
         ):
-            edge_weight_sample = self._rsample_noise_rec(graph, feat)
+            edge_weight_sample = self._rsample_noise_rec(graph, sample_dimension)
 
         return edge_weight_sample
 
-    def _rsample_noise_r1(self, graph, feat):
+    def _rsample_noise_r1(self, graph, sample_dimension):
         """ Sample from a distribution on $\mathbb{R}^1$. """
         return self.q_a.rsample(
-            [graph.number_of_edges(), feat.shape[1]],
+            [graph.number_of_edges(), sample_dimension],
         )
 
-    def _rsample_noise_rc(self, graph, feat):
+    def _rsample_noise_rc(self, graph, sample_dimension):
         """ Sample from a distribution on $\mathbb{R}^C$. """
         return self.q_a.rsample(
             [graph.number_of_edges()],
         )
 
-    def _rsample_noise_re(self, graph, feat):
+    def _rsample_noise_re(self, graph, sample_dimension):
         """ Sample from a distribution on $\mathbb{R}^E$. """
         return self.q_a.rsample(
-            [feat.shape[1]]
+            [sample_dimension]
         ).squeeze(-1).transpose(1, 0)
 
-    def _rsample_noise_rec(self, graph, feat):
+    def _rsample_noise_rec(self, graph, sample_dimension):
         """ Sample from a distribution on $\mathbb{R}^{E \times C}$. """
         return self.q_a.rsample()
 
