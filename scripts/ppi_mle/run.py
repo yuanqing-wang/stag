@@ -27,7 +27,7 @@ def run(args):
                 args.hidden_features,
                 activation=torch.nn.functional.relu,
             ),
-            q_a=torch.distributions.Normal(1.0, args.std),
+            q_a=torch.distributions.Normal(1.0, args.std, validate_args=False),
         )
     )
 
@@ -39,7 +39,7 @@ def run(args):
                     args.hidden_features,
                     activation=torch.nn.functional.relu,
                 ),
-                q_a=torch.distributions.Normal(1.0, args.std),
+                q_a=torch.distributions.Normal(1.0, args.std, validate_args=False),
             ),
         )
 
@@ -50,7 +50,7 @@ def run(args):
                 out_features,
                 activation=torch.sigmoid,
             ),
-            q_a=torch.distributions.Normal(1.0, args.std),
+            q_a=torch.distributions.Normal(1.0, args.std, validate_args=False),
         )
     )
 
