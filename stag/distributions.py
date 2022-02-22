@@ -1,6 +1,7 @@
 import torch
 from torch.distributions import constraints
 from typing import Union, Callable
+from functools import partial
 
 class Distribution(torch.nn.Module):
     def __init__(self):
@@ -123,7 +124,10 @@ class ParametrizedDistribution(Distribution):
                 self.register_buffer(key, torch.tensor(value))
             new_parameter_names = parameter_names
 
-        self.base_distribution_instance = base_distribution.__class__
+        self.base_distribution_instance = partial(
+            base_distribution.__class__,
+            validate_args=False,
+        )
         self.new_parameter_names = new_parameter_names
 
     def __repr__(self):

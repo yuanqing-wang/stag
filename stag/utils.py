@@ -13,7 +13,7 @@ class EarlyStopping(object):
 
         elif any(loss <= best_loss for loss, best_loss in zip(losses, self.best_losses)):
             if all(loss <= best_loss for loss, best_loss in zip(losses, self.best_losses)):
-                self.best_state = model.get_state_dict()
+                self.best_state = model.state_dict()
             self.best_losses = [min(loss, best_loss) for loss, best_loss in zip(losses, self.best_losses)]
             self.counter = 0
 

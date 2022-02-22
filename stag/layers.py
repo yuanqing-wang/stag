@@ -127,7 +127,7 @@ class StagLayer(torch.nn.Module):
 
     def _rsample_noise_r1(self, graph, sample_dimension):
         """ Sample from a distribution on $\mathbb{R}^1$. """
-        return self.q_a.rsample(
+        return self.q_a.sample(
             [graph.number_of_edges(), sample_dimension],
         )
 
@@ -156,6 +156,9 @@ class StagLayer(torch.nn.Module):
         # kl_divergence = self.q_a.log_prob(edge_weight_sample).mean()\
         #    - self.p_a.log_prob(edge_weight_sample).mean()
 
+        print(self.q_a.base_distribution.mean)
+        print(self.q_a.base_distribution.stddev)
+
         kl_divergence = torch.distributions.kl_divergence(
             self.q_a.base_distribution,
             self.p_a.base_distribution,
@@ -164,6 +167,7 @@ class StagLayer(torch.nn.Module):
         return kl_divergence
 
 class FeatOnlyLayer(torch.nn.Module):
+    vi = False
     def __init__(self, layer):
         super(FeatOnlyLayer, self).__init__()
         self.layer = layer

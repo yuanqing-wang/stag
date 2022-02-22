@@ -22,6 +22,7 @@ class CategoricalLikelihood(Likelihood):
         )
 
     def condition(self, feat):
+        print(feat)
         return self.distribution(
             probs=feat,
         )
