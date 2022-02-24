@@ -156,7 +156,6 @@ class StagLayer(torch.nn.Module):
         # kl_divergence = self.q_a.log_prob(edge_weight_sample).mean()\
         #    - self.p_a.log_prob(edge_weight_sample).mean()
 
-
         kl_divergence = torch.distributions.kl_divergence(
             self.q_a.base_distribution,
             self.p_a.base_distribution,
@@ -174,6 +173,7 @@ class FeatOnlyLayer(torch.nn.Module):
         return self.layer(feat)
 
 class SumNodes(torch.nn.Module):
+    vi = False
     def __init__(self, name="to_sum"):
         super(SumNodes, self).__init__()
         self.name = name
