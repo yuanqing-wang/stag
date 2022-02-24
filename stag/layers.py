@@ -156,8 +156,6 @@ class StagLayer(torch.nn.Module):
         # kl_divergence = self.q_a.log_prob(edge_weight_sample).mean()\
         #    - self.p_a.log_prob(edge_weight_sample).mean()
 
-        print(self.q_a.base_distribution.mean)
-        print(self.q_a.base_distribution.stddev)
 
         kl_divergence = torch.distributions.kl_divergence(
             self.q_a.base_distribution,
