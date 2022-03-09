@@ -110,42 +110,13 @@ class StagLayer(torch.nn.Module):
         )
 
     def rsample_noise(self, graph, sample_dimension):
-        batch_shape = self.q_a.batch_shape
 
-        if batch_shape == torch.Size([]):
-            edge_weight_sample = self._rsample_noise_r1(graph, sample_dimension)
-        elif batch_shape == torch.Size([sample_dimension]):
-            edge_weight_sample = self._rsample_noise_rc(graph, sample_dimension)
-        elif batch_shape == torch.Size([graph.number_of_edges(), 1]):
-            edge_weight_sample = self._rsample_noise_re(graph, sample_dimension)
-        elif batch_shape == torch.Size(
-            [graph.number_of_edges(), sample_dimension]
-        ):
-            edge_weight_sample = self._rsample_noise_rec(graph, sample_dimension)
+        edge_weight_sample = self.q_a.expand(
+            [graph.number_of_edges(), sample_dimension],
+        ).rsample()
 
         return edge_weight_sample
 
-    def _rsample_noise_r1(self, graph, sample_dimension):
-        """ Sample from a distribution on $\mathbb{R}^1$. """
-        return self.q_a.sample(
-            [graph.number_of_edges(), sample_dimension],
-        )
-
-    def _rsample_noise_rc(self, graph, sample_dimension):
-        """ Sample from a distribution on $\mathbb{R}^C$. """
-        return self.q_a.rsample(
-            [graph.number_of_edges()],
-        )
-
-    def _rsample_noise_re(self, graph, sample_dimension):
-        """ Sample from a distribution on $\mathbb{R}^E$. """
-        return self.q_a.rsample(
-            [sample_dimension]
-        ).squeeze(-1).transpose(1, 0)
-
-    def _rsample_noise_rec(self, graph, sample_dimension):
-        """ Sample from a distribution on $\mathbb{R}^{E \times C}$. """
-        return self.q_a.rsample()
 
     def kl_divergence(self):
         if not self.vi:
