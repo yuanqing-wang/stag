@@ -24,7 +24,7 @@ def _in_norm(graph, edge_weight_sample):
     node_scaling = torch.where(
         torch.ne(current_sum, 0.0),
         desired_sum / current_sum,
-        torch.zeros_like(current_sum),
+        torch.ones_like(current_sum),
     )
 
     graph.ndata["s"] = node_scaling
@@ -32,7 +32,7 @@ def _in_norm(graph, edge_weight_sample):
     # put scaling back to edges
     graph.apply_edges(lambda edges: {"s": edges.dst["s"]})
     edge_scaling = graph.edata["s"]
-    edge_weight_sample *= edge_scaling
+    edge_weight_sample = edge_weight_sample * edge_scaling
     return edge_weight_sample
 
 class StagLayer(torch.nn.Module):

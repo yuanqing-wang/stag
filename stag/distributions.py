@@ -98,6 +98,7 @@ class ParametrizedDistribution(Distribution):
     ):
         super().__init__()
         parameter_names = list(base_distribution.arg_constraints.keys())
+        if "logits" in parameter_names: parameter_names.remove("logits")
 
         parameters = {
             key: getattr(base_distribution, key)
@@ -107,7 +108,7 @@ class ParametrizedDistribution(Distribution):
         if vi:
             new_parameter_names = []
             for key, value in parameters.items():
-                if base_distribution.arg_constraints[key] == constraints.positive:
+                if base_distribution.__class__.arg_constraints[key] == constraints.positive:
                     setattr(
                         self,
                         "log_" + key,
@@ -169,9 +170,12 @@ class AmortizedDistribution(Distribution):
         self.new_parameter_names = new_parameter_names
 
         self.embedding_mlp = torch.nn.Sequential(
-            torch.nn.Linear(2 * in_features, hidden_features),
+            torch.nn.Linear(2 * in_features + 1, hidden_features),
             activation,
+            # torch.nn.Linear(hidden_features, hidden_features),
+            # activation,
         )
+
 
         self.parameters_mlp = torch.nn.ModuleDict(
             {
@@ -192,8 +196,8 @@ class AmortizedDistribution(Distribution):
 
         for parameter in self.new_parameter_names:
             # torch.nn.init.normal_(
-            #    self.parameters_mlp[parameter].weight,
-            #    0.0, 1e-5,
+            #     self.parameters_mlp[parameter].weight,
+            #     0.0, 1e-5,
             # )
 
             if "log_" in parameter:
@@ -211,14 +215,16 @@ class AmortizedDistribution(Distribution):
     def condition(self, graph, feat):
         graph = graph.local_var()
         graph.ndata['h'] = feat
+        graph.ndata['id'] = graph.nodes().unsqueeze(-1)
 
         graph.apply_edges(
-            lambda edges: {'h': self.embedding_mlp(torch.cat([edges.src['h'], edges.dst['h']], dim=-1))},
+            lambda edges: {'h': self.embedding_mlp(torch.cat([edges.src['h'], edges.dst['h'], 1.0*(edges.src['id'] == edges.dst['id'])], dim=-1))},
         )
 
         self.new_parameters = dict(
             {key: self.parameters_mlp[key](graph.edata['h']) for key in self.new_parameter_names},
         )
+
         return self
 
     @property

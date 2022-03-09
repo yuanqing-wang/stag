@@ -52,14 +52,14 @@ class StagModel(torch.nn.Module):
             reg = 0.0
             for layer in self.layers:
                 if layer.vi:
-                    reg = reg + layer.kl_divergence().sum(dim=-1).mean()
+                    reg = reg + layer.kl_divergence().mean()
             total_nll = total_nll + nll
             total_reg = total_reg + reg
 
         total_nll = total_nll / n_samples
         total_reg = total_reg / n_samples
         total_reg = total_reg * kl_scaling
-        print(total_nll, total_reg)
+
         return total_nll, total_reg
 
 
