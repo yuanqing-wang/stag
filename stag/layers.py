@@ -110,10 +110,15 @@ class StagLayer(torch.nn.Module):
         )
 
     def rsample_noise(self, graph, sample_dimension):
-
-        edge_weight_sample = self.q_a.expand(
+        edge_weight_distribution = self.q_a.expand(
             [graph.number_of_edges(), sample_dimension],
-        ).rsample()
+        )
+
+        if self.vi:
+            edge_weight_sample = edge_weight_distribution.rsample()
+        else:
+            edge_weight_sample = edge_weight_distribution.sample()
+
 
         return edge_weight_sample
 
