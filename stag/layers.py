@@ -179,7 +179,8 @@ class StagLayerContrastive(StagLayer):
         # negative edge distribution
         fake_src = torch.randint(high=graph.number_of_nodes(), size=[graph.number_of_edges()])
         fake_dst = torch.randint(high=graph.number_of_nodes(), size=[graph.number_of_edges()])
-        h_fake = self.q_a.embedding_mlp(torch.cat([graph.ndata['h'][fake_src], graph.ndata['h'][fake_dst]], dim=-1))
+        print(feat.shape)
+        h_fake = self.q_a.embedding_mlp(torch.cat([feat[fake_src], feat[fake_dst]], dim=-1))
         fake_new_parameters = {key: self.q_a.parameters_mlp[key](h_fake) for key in self.q_a.new_parameter_names}
         q_a_negative = self.q_a.base_distribution_class(
                 **{

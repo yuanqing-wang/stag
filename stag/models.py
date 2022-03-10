@@ -69,9 +69,39 @@ class StagModel(torch.nn.Module):
 
 
 class StagModelContrastive(StagModel):
-    def nll_contrastive(self, graph, feat):
-        nll = 0.0
+    def _forward(self, graph, feat):
+        _graph = graph.local_var()
         for layer in self.layers:
-            if hasattr(layer, "nll_contrastive"):
-                nll = nll + layer.nll_contrastive(graph, feat)
-        return nll
+            feat = layer(_graph, feat)
+        return feat
+
+    def loss_terms(self, graph, feat, y, mask=None, n_samples=1, kl_scaling=None):
+        if kl_scaling is None: kl_scaling = self.kl_scaling
+        total_nll = 0.0
+        total_reg = 0.0
+        for _ in range(n_samples):
+            reg = 0.0
+            _feat, nll_contrastive = self._forward(graph, feat)
+            reg = reg + nll_contrastive
+            nll = -self.likelihood.log_prob(_feat, y)
+            if mask is not None:
+                nll = nll[mask]
+            nll = nll.mean()
+            for layer in self.layers:
+                if layer.vi:
+                    reg = reg + layer.kl_divergence()
+            total_nll = total_nll + nll
+            total_reg = total_reg + reg
+
+        total_nll = total_nll / n_samples
+        total_reg = total_reg / n_samples
+        total_reg = total_reg * kl_scaling
+
+        return total_nll, total_reg
+
+
+    def loss(self, graph, feat, y, mask=None, n_samples=1, kl_scaling=None):
+        nll, reg = self.loss_terms(graph, feat, y, mask=mask, n_samples=n_samples, kl_scaling=kl_scaling)
+        return nll + reg
+
+
