@@ -35,37 +35,6 @@ def _in_norm(graph, edge_weight_sample):
     edge_weight_sample = edge_weight_sample * edge_scaling
     return edge_weight_sample
 
-def nll_contrastive(q_a, graph, feat):
-    graph = graph.local_var()
-    graph.ndata['h'] = feat
-
-    # positive edge distribution
-    graph.apply_edges(
-        lambda edges: {'h': q_a.embedding_mlp(torch.cat([edges.src['h'], edges.dst['h']], dim=-1))},
-    )
-
-    new_parameters = {key: q_a.parameters_mlp[key](graph.edata['h']) for key in q_a.new_parameter_names}
-    q_a_positive = q_a.base_distribution_class(
-            **{
-                key.replace("log_", ""): new_parameters[key].exp() if "log_" in key else new_parameters[key]
-                for key in q_a.new_parameter_names
-            }
-    )
-
-    # negative edge distribution
-    fake_src = torch.randint(high=graph.number_of_nodes(), size=[graph.number_of_edges()])
-    fake_dst = torch.randint(high=graph.number_of_nodes(), size=[graph.number_of_edges()])
-    h_fake = q_a.embedding_mlp(torch.cat([graph.ndata['h'][fake_src], graph.ndata['h'][fake_dst]], dim=-1))
-    fake_new_parameters = {key: q_a.parameters_mlp[key](h_fake) for key in q_a.new_parameter_names}
-    q_a_negative = q_a.base_distribution_class(
-            **{
-                key.replace("log_", ""): fake_new_parameters[key].exp() if "log_" in key else fake_new_parameters[key]
-                for key in q_a.new_parameter_names
-            }
-    )
-
-    nll = -q_a_positive.log_prob(torch.tensor(1.0, device=feat.device)).mean() - q_a_negative.log_prob(torch.tensor(0.0, device=feat.device)).mean()
-    return nll
 
 class StagLayer(torch.nn.Module):
     """ Make a DGL Graph Conv Layer stochastic.
@@ -170,27 +139,6 @@ class StagLayer(torch.nn.Module):
         ).mean()
 
         return kl_divergence
-
-
-class StagLayerContrastive(StagLayer):
-    def nll_contrastive(self, graph, feat):
-        """ Forward pass. """
-        graph = graph.local_var()
-        # negative edge distribution
-        fake_src = torch.randint(high=graph.number_of_nodes(), size=[graph.number_of_edges()])
-        fake_dst = torch.randint(high=graph.number_of_nodes(), size=[graph.number_of_edges()])
-        print(feat.shape)
-        h_fake = self.q_a.embedding_mlp(torch.cat([feat[fake_src], feat[fake_dst]], dim=-1))
-        fake_new_parameters = {key: self.q_a.parameters_mlp[key](h_fake) for key in self.q_a.new_parameter_names}
-        q_a_negative = self.q_a.base_distribution_class(
-                **{
-                    key.replace("log_", ""): fake_new_parameters[key].exp() if "log_" in key else fake_new_parameters[key]
-                    for key in self.q_a.new_parameter_names
-                }
-        )
-
-        nll = -self.q_a.log_prob(torch.tensor(1.0, device=feat.device)).mean() - q_a_negative.log_prob(torch.tensor(0.0, device=feat.device)).mean()
-        return nll
 
 class FeatOnlyLayer(torch.nn.Module):
     vi = False
