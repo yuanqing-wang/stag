@@ -52,3 +52,13 @@ def test_forward_rec():
     h = torch.randn(3, 16)
     h = layer(g, h)
     assert h.shape == torch.Size([3, 32])
+
+def test_contrastive():
+    import torch, dgl
+    import stag
+    layer = stag.zoo.GCN(16, 32)
+    q_a = stag.distributions.AmortizedDistribution(16, 16)
+    g = dgl.rand_graph(3, 9)
+    h = torch.randn(3, 16)
+    nll_contrastive = stag.layers.nll_contrastive(q_a, g, h)
+    print(nll_contrastive)

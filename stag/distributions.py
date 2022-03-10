@@ -125,7 +125,7 @@ class ParametrizedDistribution(Distribution):
                 self.register_buffer(key, torch.tensor(value))
             new_parameter_names = parameter_names
 
-        self.base_distribution_instance = partial(
+        self.base_distribution_class = partial(
             base_distribution.__class__,
             validate_args=False,
         )
@@ -136,7 +136,7 @@ class ParametrizedDistribution(Distribution):
 
     @property
     def base_distribution(self):
-        return self.base_distribution_instance(
+        return self.base_distribution_class(
             **{
                 key.replace("log_", ""):getattr(self, key).exp() if "log_" in key else getattr(self, key)
                 for key in self.new_parameter_names
@@ -170,7 +170,7 @@ class AmortizedDistribution(Distribution):
         self.new_parameter_names = new_parameter_names
 
         self.embedding_mlp = torch.nn.Sequential(
-            torch.nn.Linear(2 * in_features + 1, hidden_features),
+            torch.nn.Linear(2 * in_features, hidden_features),
             activation,
             # torch.nn.Linear(hidden_features, hidden_features),
             # activation,
@@ -215,10 +215,9 @@ class AmortizedDistribution(Distribution):
     def condition(self, graph, feat):
         graph = graph.local_var()
         graph.ndata['h'] = feat
-        graph.ndata['id'] = graph.nodes().unsqueeze(-1)
 
         graph.apply_edges(
-            lambda edges: {'h': self.embedding_mlp(torch.cat([edges.src['h'], edges.dst['h'], 1.0*(edges.src['id'] == edges.dst['id'])], dim=-1))},
+            lambda edges: {'h': self.embedding_mlp(torch.cat([edges.src['h'], edges.dst['h']], dim=-1))},
         )
 
         self.new_parameters = dict(
