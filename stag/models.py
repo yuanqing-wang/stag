@@ -52,7 +52,7 @@ class StagModel(torch.nn.Module):
             reg = 0.0
             for layer in self.layers:
                 if layer.vi:
-                    reg = reg + layer.kl_divergence().mean()
+                    reg = reg + layer.kl_divergence()
             total_nll = total_nll + nll
             total_reg = total_reg + reg
 
@@ -66,3 +66,12 @@ class StagModel(torch.nn.Module):
     def loss(self, graph, feat, y, mask=None, n_samples=1, kl_scaling=None):
         nll, reg = self.loss_terms(graph, feat, y, mask=mask, n_samples=n_samples, kl_scaling=kl_scaling)
         return nll + reg
+
+
+class StagModelContrastive(StagModel):
+    def nll_contrastive(self, graph, feat):
+        nll = 0.0
+        for layer in self.layers:
+            if hasattr(layer, "nll_contrastive"):
+                nll = nll + layer.nll_contrastive(graph, feat)
+        return nll

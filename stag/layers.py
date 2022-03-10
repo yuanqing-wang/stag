@@ -167,9 +167,29 @@ class StagLayer(torch.nn.Module):
         kl_divergence = torch.distributions.kl_divergence(
             self.q_a.base_distribution,
             self.p_a.base_distribution,
-        )
+        ).mean()
 
         return kl_divergence
+
+
+class StagLayerContrastive(StagLayer):
+    def nll_contrastive(self, graph, feat):
+        """ Forward pass. """
+        graph = graph.local_var()
+        # negative edge distribution
+        fake_src = torch.randint(high=graph.number_of_nodes(), size=[graph.number_of_edges()])
+        fake_dst = torch.randint(high=graph.number_of_nodes(), size=[graph.number_of_edges()])
+        h_fake = self.q_a.embedding_mlp(torch.cat([graph.ndata['h'][fake_src], graph.ndata['h'][fake_dst]], dim=-1))
+        fake_new_parameters = {key: self.q_a.parameters_mlp[key](h_fake) for key in self.q_a.new_parameter_names}
+        q_a_negative = self.q_a.base_distribution_class(
+                **{
+                    key.replace("log_", ""): fake_new_parameters[key].exp() if "log_" in key else fake_new_parameters[key]
+                    for key in self.q_a.new_parameter_names
+                }
+        )
+
+        nll = -self.q_a.log_prob(torch.tensor(1.0, device=feat.device)).mean() - q_a_negative.log_prob(torch.tensor(0.0, device=feat.device)).mean()
+        return nll
 
 class FeatOnlyLayer(torch.nn.Module):
     vi = False
