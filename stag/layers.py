@@ -67,7 +67,9 @@ class StagLayer(torch.nn.Module):
 
         if isinstance(q_a, torch.distributions.Distribution):
             q_a = ParametrizedDistribution(q_a, vi=vi)
-        if isinstance(p_a, torch.distributions.Distribution):
+        if isinstance(p_a, torch.distributions.MixtureSameFamily):
+            p_a.base_distribution = p_a
+        elif isinstance(p_a, torch.distributions.Distribution):
             p_a = ParametrizedDistribution(p_a, vi=vi)
         elif p_a is None:
             p_a = ParametrizedDistribution(q_a, vi=vi)
@@ -118,8 +120,8 @@ class StagLayer(torch.nn.Module):
         if self.vi:
             edge_weight_sample = edge_weight_distribution.rsample()
         else:
-            edge_weight_sample = edge_weight_distribution.sample()
-
+            with torch.no_grad():
+                edge_weight_sample = edge_weight_distribution.sample()
 
         return edge_weight_sample
 
@@ -127,16 +129,15 @@ class StagLayer(torch.nn.Module):
     def kl_divergence(self):
         if not self.vi:
             return 0.0
+        try:
+            kl_divergence = torch.distributions.kl_divergence(
+                self.q_a.base_distribution,
+                self.p_a.base_distribution,
+            ).mean() # .sum(dim=-1).mean()
 
-        # edge_weight_sample = self._edge_weight_sample
-
-        # kl_divergence = self.q_a.log_prob(edge_weight_sample).mean()\
-        #    - self.p_a.log_prob(edge_weight_sample).mean()
-
-        kl_divergence = torch.distributions.kl_divergence(
-            self.q_a.base_distribution,
-            self.p_a.base_distribution,
-        ).mean()
+        except:
+            kl_divergence = self.q_a.log_prob(self._edge_weight_sample).sum(dim=-1).mean() \
+                    - self.p_a.log_prob(self._edge_weight_sample).sum(dim=-1).mean()
 
         return kl_divergence
 
@@ -159,4 +160,16 @@ class SumNodes(torch.nn.Module):
         graph = graph.local_var()
         graph.ndata[self.name] = feat
         feat = dgl.sum_nodes(graph, self.name)
+        return feat
+
+class MeanNodes(torch.nn.Module):
+    vi = False
+    def __init__(self, name="to_mean"):
+        super(MeanNodes, self).__init__()
+        self.name = name
+
+    def forward(self, graph, feat):
+        graph = graph.local_var()
+        graph.ndata[self.name] = feat
+        feat = dgl.mean_nodes(graph, self.name)
         return feat

@@ -20,7 +20,8 @@ def nll_contrastive(q_a, graph, feat):
             }
     )
 
-    nll = -q_a.log_prob(torch.tensor(1.0, device=feat.device)).mean() - q_a_negative.log_prob(torch.tensor(0.0, device=feat.device)).mean()
+    nll = -q_a.log_prob(torch.tensor(1.0, device=feat.device)) - q_a_negative.log_prob(torch.tensor(0.0, device=feat.device))
+    nll = nll.sum(dim=-1).mean()
     return nll
 
 class StagModel(torch.nn.Module):
@@ -93,7 +94,10 @@ class StagModelContrastive(StagModel):
         graph = graph.local_var()
         for layer in self.layers:
             _feat = layer(graph, feat)
-            _nll_contrastive = nll_contrastive(layer.q_a, graph, feat)
+            if hasattr(layer, "q_a"):
+                _nll_contrastive = nll_contrastive(layer.q_a, graph, feat)
+            else:
+                _nll_contrastive = 0.0
             feat = _feat
         return feat, _nll_contrastive
 
@@ -120,3 +124,23 @@ class StagModelContrastive(StagModel):
         total_reg = total_reg * kl_scaling
 
         return total_nll, total_reg
+
+    def forward(self, graph, feat, n_samples=1, return_parameters=False):
+        feat = torch.mean(
+            torch.stack(
+                [
+                    self._forward(graph, feat)[0]
+                    for _ in range(n_samples)
+                ],
+                dim=0,
+            ),
+            dim=0,
+        )
+
+        if return_parameters is True:
+            return feat
+
+        y_hat = self.likelihood.condition(feat).sample()
+        return y_hat
+
+

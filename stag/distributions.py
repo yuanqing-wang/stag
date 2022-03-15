@@ -132,7 +132,7 @@ class ParametrizedDistribution(Distribution):
         self.new_parameter_names = new_parameter_names
 
     def __repr__(self):
-         return repr(self.base_distribution)
+        return repr(self.base_distribution)
 
     @property
     def base_distribution(self):
@@ -165,6 +165,12 @@ class AmortizedDistribution(Distribution):
             if base_distribution_class.arg_constraints[parameter_name] == constraints.positive:
                 new_parameter_name = "log_" + parameter_name
                 new_parameter_names.append(new_parameter_name)
+            elif hasattr(base_distribution_class.arg_constraints[parameter_name], "base_constraint"):
+                if base_distribution_class.arg_constraints[parameter_name].base_constraint == constraints.positive:
+                    new_parameter_name = "log_" + parameter_name
+                    new_parameter_names.append(new_parameter_name)
+                else:
+                    new_parameter_names.append(parameter_name)
             else:
                 new_parameter_names.append(parameter_name)
         self.new_parameter_names = new_parameter_names
@@ -203,13 +209,13 @@ class AmortizedDistribution(Distribution):
             if "log_" in parameter:
                 torch.nn.init.constant_(
                     self.parameters_mlp[parameter].bias,
-                    torch.log(getattr(init_like, parameter.replace("log_", ""))),
+                    torch.log(getattr(init_like, parameter.replace("log_", ""))).mean(),
                 )
 
             else:
                 torch.nn.init.constant_(
                     self.parameters_mlp[parameter].bias,
-                    getattr(init_like, parameter),
+                    getattr(init_like, parameter).mean(),
                 )
 
     def condition(self, graph, feat):
