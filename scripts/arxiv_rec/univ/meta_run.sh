@@ -4,11 +4,11 @@
 #BSUB -R "rusage[mem=10] span[ptile=1]"
 #BSUB -W 4:00
 
-for std in 0.0 # 0.1 0.2 0.3 0.4 0.5  # 0.2 0.4 0.8
+for std in 0.0 0.1 0.2 0.3 0.4 0.5  # 0.2 0.4 0.8
 do
-                for data in arxiv # citeseer cora pubmed
+                for data in cora# citeseer cora pubmed
                 do
-                    for repeat in 0 # 1 2 
+                    for repeat in 0 1 2 
                     do
                         for model in GCN
                         do

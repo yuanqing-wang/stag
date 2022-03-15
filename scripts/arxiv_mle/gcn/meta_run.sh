@@ -4,19 +4,19 @@
 #BSUB -R "rusage[mem=10] span[ptile=1]"
 #BSUB -W 4:00
 
-for std in 0.0 # 0.1 0.2 0.3 0.4 0.5  # 0.2 0.4 0.8
+for std in 0.0 0.1 0.2 0.3 0.4 0.5  # 0.2 0.4 0.8
 do
                 for data in arxiv # citeseer cora pubmed
                 do
-                    for repeat in 0 # 1 2 
+                    for repeat in {0..9}
                     do
-                        for model in GCN
+                        for model in GCN GraphSAGE
                         do
-                            for distribution in Normal # Uniform
+                            for distribution in Normal Uniform Bernoulli
                             do
 
                         out=$model"_"$distribution"_"$data"_"$std"_"$repeat
-                        bsub -q gpuqueue -o %J.stdout -gpu "num=1:j_exclusive=yes" -R "rusage[mem=10] span[ptile=1]" -W 0:15 python run.py\
+                        bsub -q gpuqueue -o %J.stdout -gpu "num=1:j_exclusive=yes" -R "rusage[mem=10] span[ptile=1]" -W 0:30 python run.py\
         --model $model \
         --std $std \
         --data $data \

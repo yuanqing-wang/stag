@@ -3,6 +3,20 @@ import dgl
 import stag
 from itertools import chain
 
+
+from torch.distributions import LowRankMultivariateNormal
+class OneRankMultivariateNormal(object):
+    arg_constraints = LowRankMultivariateNormal.arg_constraints
+    def __new__(cls, loc, cov_factor, cov_diag, validate_args=None):
+        cov_factor = cov_factor.unsqueeze(-1)
+        return LowRankMultivariateNormal(
+            loc=loc,
+            cov_factor=cov_factor,
+            cov_diag=cov_diag,
+            validate_args=validate_args,
+        )
+
+
 def run(args):
     if args.data == "cora":
         ds = dgl.data.CoraGraphDataset()
@@ -37,6 +51,7 @@ def run(args):
     kl_scaling = args.kl_scaling * g.number_of_edges() * g.ndata["train_mask"].sum() / (g.ndata["train_mask"].shape[0] ** 2)
 
     p_a = torch.distributions.Normal(1.0, args.std)
+    p_a_init = OneRankMultivariateNormal(loc=torch.ones(1), cov_factor=torch.tensor([[0.0]]), cov_diag=args.std * torch.ones(1))
 
     layers = torch.nn.ModuleList()
 
@@ -46,7 +61,7 @@ def run(args):
         layers.append(
             stag.layers.FeatOnlyLayer(
                 torch.nn.Dropout(0.5),
-            ),
+            ), 
         )
 
     layers.append(
@@ -56,7 +71,7 @@ def run(args):
                 args.hidden_features,
                 activation=torch.nn.functional.relu,
             ),
-            q_a=stag.distributions.AmortizedDistribution(in_features, in_features, init_like=p_a),
+            q_a=stag.distributions.AmortizedDistribution(in_features, in_features, base_distribution_class=OneRankMultivariateNormal, init_like=p_a_init),
             p_a=p_a,
             vi=True,
             # norm=True,
@@ -78,7 +93,7 @@ def run(args):
                 out_features,
                 activation=lambda x: torch.nn.functional.softmax(x, dim=-1),
             ),
-            q_a=stag.distributions.AmortizedDistribution(args.hidden_features, args.hidden_features, init_like=p_a),
+            q_a=stag.distributions.AmortizedDistribution(args.hidden_features, args.hidden_features, base_distribution_class=OneRankMultivariateNormal, init_like=p_a_init),
             p_a=p_a,
             vi=True,
             # norm=True,
