@@ -5,10 +5,36 @@ from dgl.nn import edge_softmax
 from dgl.base import DGLError
 
 class GAT(dgl.nn.GATConv):
-    def __init__(self, *args, last=False, **kwargs):
-        super().__init__(*args, num_heads=3, **kwargs)
+    def __init__(self, *args, last=False, num_heads=4, **kwargs):
+        super().__init__(*args, num_heads=num_heads, **kwargs)
         self.last = last
-        self.sample_dimension = self._out_feats
+        self.sample_dimension = num_heads
+
+
+    def reset_parameters(self):
+        """
+
+        Description
+        -----------
+        Reinitialize learnable parameters.
+
+        Note
+        ----
+        The fc weights :math:`W^{(l)}` are initialized using Glorot uniform initialization.
+        The attention weights are using xavier initialization method.
+        """
+        gain = torch.nn.init.calculate_gain('relu')
+        if hasattr(self, 'fc'):
+            torch.nn.init.xavier_uniform_(self.fc.weight, gain=gain)
+        else:
+            torch.nn.init.xavier_uniform_(self.fc_src.weight, gain=gain)
+            torch.nn.init.xavier_uniform_(self.fc_dst.weight, gain=gain)
+        torch.nn.init.xavier_uniform_(self.attn_l, gain=gain)
+        torch.nn.init.xavier_uniform_(self.attn_r, gain=gain)
+        if self.bias is not None:
+            torch.nn.init.constant_(self.bias, 0)
+        if isinstance(self.res_fc, torch.nn.Linear):
+            torch.nn.init.xavier_uniform_(self.res_fc.weight, gain=gain)
 
     def forward(self, graph, feat, get_attention=False, edge_weight=None):
         r"""
@@ -99,12 +125,13 @@ class GAT(dgl.nn.GATConv):
             # compute edge attention, el and er are a_l Wh_i and a_r Wh_j respectively.
             graph.apply_edges(fn.u_add_v('el', 'er', 'e'))
             e = self.leaky_relu(graph.edata.pop('e'))
-            # compute softmax
-            graph.edata['a'] = self.attn_drop(edge_softmax(graph, e))
 
             if edge_weight is not None:
-                edge_weight = edge_weight.unsqueeze(-2)
-                graph.edata['a'] = graph.edata['a'] * edge_weight
+                edge_weight = edge_weight.unsqueeze(-1)
+                e = edge_weight * e
+
+            # compute softmax
+            graph.edata['a'] = self.attn_drop(edge_softmax(graph, e))
 
             # message passing
             graph.update_all(fn.u_mul_e('ft', 'a', 'm'),
@@ -120,13 +147,13 @@ class GAT(dgl.nn.GATConv):
                 rst = rst + self.bias.view(
                     *((1,) * len(dst_prefix_shape)), self._num_heads, self._out_feats)
             # activation
+            if self.last:
+                rst = rst.mean(-2)
+            else:
+                rst = rst.flatten(-2, -1)
+            
             if self.activation:
                 rst = self.activation(rst)
-
-            if self.last:
-                rst = rst.flatten(-2, -1)
-            else:
-                rst = rst.mean(-2)
 
             if get_attention:
                 return rst, graph.edata['a']

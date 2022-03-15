@@ -5,11 +5,11 @@ import dgl.function as fn
 from dgl.utils import check_eq_shape
 
 class GraphSAGE(dgl.nn.SAGEConv):
-    def __init__(self, in_features, out_features, activation=None):
+    def __init__(self, in_features, out_features, activation=None, aggregator_type="mean"):
         super().__init__(
             in_feats=in_features,
             out_feats=out_features,
-            aggregator_type="mean",
+            aggregator_type=aggregator_type,
             activation=activation,
         )
 
