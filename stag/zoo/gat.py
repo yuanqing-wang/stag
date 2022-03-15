@@ -72,18 +72,6 @@ class GAT(dgl.nn.GATConv):
             The error can be ignored by setting ``allow_zero_in_degree`` parameter to ``True``.
         """
         with graph.local_scope():
-            if not self._allow_zero_in_degree:
-                if (graph.in_degrees() == 0).any():
-                    raise DGLError('There are 0-in-degree nodes in the graph, '
-                                   'output for those nodes will be invalid. '
-                                   'This is harmful for some applications, '
-                                   'causing silent performance regression. '
-                                   'Adding self-loop on the input graph by '
-                                   'calling `g = dgl.add_self_loop(g)` will resolve '
-                                   'the issue. Setting ``allow_zero_in_degree`` '
-                                   'to be `True` when constructing this module will '
-                                   'suppress the check and let the code run.')
-
             if isinstance(feat, tuple):
                 src_prefix_shape = feat[0].shape[:-1]
                 dst_prefix_shape = feat[1].shape[:-1]
@@ -151,7 +139,7 @@ class GAT(dgl.nn.GATConv):
                 rst = rst.mean(-2)
             else:
                 rst = rst.flatten(-2, -1)
-            
+
             if self.activation:
                 rst = self.activation(rst)
 
