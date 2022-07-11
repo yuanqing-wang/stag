@@ -25,3 +25,14 @@ class CategoricalLikelihood(Likelihood):
         return self.distribution(
             probs=feat,
         )
+
+class BernoulliLikelihood(Likelihood):
+    def __init__(self):
+        super(BernoulliLikelihood, self).__init__(
+            distribution=torch.distributions.Bernoulli
+        )
+
+    def condition(self, feat):
+        return self.distribution(
+            probs=feat,
+        )

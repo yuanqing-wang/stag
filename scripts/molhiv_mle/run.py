@@ -19,12 +19,12 @@ def run(args):
     layers = torch.nn.ModuleList()
     layers.append(
         stag.layers.StagLayer(
-            dgl.nn.GraphConv(
+            stag.zoo.GCN(
                 in_features,
                 args.hidden_features,
                 allow_zero_in_degree=True,
             ),
-            edge_weight_distribution=torch.distributions.Normal(1.0, args.std),
+            q_a=torch.distributions.Normal(1.0, args.std, validate_args=False),
         )
     )
 
@@ -43,12 +43,12 @@ def run(args):
     for idx in range(1, args.depth-1):
         layers.append(
             stag.layers.StagLayer(
-                dgl.nn.GraphConv(
+                stag.zoo.GCN(
                     args.hidden_features,
                     args.hidden_features,
                     allow_zero_in_degree=True,
                 ),
-                edge_weight_distribution=torch.distributions.Normal(1.0, args.std),
+                q_a=torch.distributions.Normal(1.0, args.std, validate_args=False),
             ),
         )
 
@@ -71,7 +71,7 @@ def run(args):
                 args.hidden_features,
                 allow_zero_in_degree=True,
             ),
-            edge_weight_distribution=torch.distributions.Normal(1.0, args.std),
+            q_a=torch.distributions.Normal(1.0, args.std, validate_args=False),
         )
     )
 
@@ -82,7 +82,7 @@ def run(args):
     )
 
     layers.append(
-        stag.layers.SumNodes(),
+        stag.layers.MeanNodes(),
     )
 
     layers.append(
@@ -108,16 +108,16 @@ def run(args):
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min", factor=0.5, patience=20)
 
     for idx_epoch in range(args.n_epochs):
-        print(idx_epoch, flush=True)
         model.train()
         for g, y in train_loader:
             if torch.cuda.is_available():
                 g = g.to("cuda:0")
+                y = y.cuda()
             optimizer.zero_grad()
             y_hat = model.forward(g, g.ndata["feat"], n_samples=1, return_parameters=True)
             loss = torch.nn.BCELoss()(
                 input=y_hat,
-                target=y.float().cuda(),
+                target=y.float(),
             )
             loss.backward()
             optimizer.step()
@@ -156,23 +156,20 @@ def run(args):
         }
     )["rocauc"]
 
-    import pandas as pd
-    df = pd.DataFrame(
-        {
-            args.data: {
-                "rocauc_te": rocauc_te,
-                "rocauc_vl": rocauc_vl,
-            }
-        }
-    )
 
-    df.to_csv("%s.csv" % args.out)
+    
+    performance = {"rocauc_te": rocauc_te, "rocauc_vl": rocauc_vl}
+    import json
+    with open(args.out + ".json", "w") as file_handle:
+        json.dump(performance, file_handle)
+
+
+
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--weight_decay", type=float, default=0.0)
-    parser.add_argument("--data", type=str, default="cora")
     parser.add_argument("--hidden_features", type=int, default=16)
     parser.add_argument("--depth", type=int, default=3)
     parser.add_argument("--learning_rate", type=float, default=1e-3)
