@@ -6,14 +6,14 @@ from stag.layers import Stag
 class Model(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        self.layer0 = Stag(1433, 8, 8, activation=torch.nn.functional.elu)
-        self.layer1 = Stag(64, 7, 1)
+        self.layer0 = Stag(1433, 8, 8, num_samples=8, activation=torch.nn.functional.elu)
+        self.layer1 = Stag(64, 7, 1, num_samples=8)
 
     def forward(self, graph, feat):
         feat = self.layer0(graph, feat)
         feat = feat.flatten(-2, -1)
         feat = self.layer1(graph, feat)
-        feat = feat.mean(-2)
+        feat = feat.mean((-1, -3))
         return feat
 
 def run():
