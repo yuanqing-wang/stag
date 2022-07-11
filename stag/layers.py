@@ -33,7 +33,7 @@ class Stag(torch.nn.Module):
         feat = self.fc(feat)
         feat = feat.reshape(feat.shape[:-1] + (self.num_heads, self.out_features))
         graph.ndata["ft"] = feat
-        loc_l, loc_r, log_scale_l, log_scale_r = self.posterior_parameters(feat).split(4, dim=-1)
+        loc_l, loc_r, log_scale_l, log_scale_r = self.posterior_parameters(feat).split(1, dim=-1)
         graph.ndata["loc_l"] = loc_l
         graph.ndata["loc_r"] = loc_r
         graph.ndata["log_scale_l"] = log_scale_l
@@ -43,7 +43,7 @@ class Stag(torch.nn.Module):
         loc = graph.edata["loc"]
         scale = graph.edata["log_scale"].exp()
         loc = self.leaky_relu(loc)
-        e = torch.distributions.Normal(scale, loc).rsample()
+        e = torch.distributions.Normal(loc, scale).rsample()
         e = dgl.nn.functional.edge_softmax(graph, e)
         graph.edata['a'] = e
         graph.update_all(
