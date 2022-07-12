@@ -17,6 +17,22 @@ class Model(torch.nn.Module):
         feat = feat.mean((-2, -3))
         return feat
 
+    def loss(self, graph):
+        # nll_contrastive = 0.0
+        feat = graph.ndata["feat"]
+        feat = feat.unsqueeze(-2).repeat_interleave(16, -2)
+        # nll_contrastive += self.layer0.nll_contrastive(graph, feat)
+        feat = self.layer0(graph, feat)
+        feat = feat.flatten(-2, -1)
+        # nll_contrastive += self.layer1.nll_contrastive(graph, feat)
+        feat = self.layer1(graph, feat)
+        feat = feat.mean((-2, -3))
+        y_hat = feat[graph.ndata["train_mask"]]
+        y = graph.ndata["label"][graph.ndata["train_mask"]]
+        kl_divergence = self.layer0.kl_divergence() + self.layer1.kl_divergence()
+        loss = torch.nn.CrossEntropyLoss()(y_hat, y) + kl_divergence
+        return loss
+
 def run():
     from dgl.data import CoraGraphDataset
     g = CoraGraphDataset()[0]
@@ -50,9 +66,7 @@ def run():
     for _ in range(1000):
         model.train()
         optimizer.zero_grad()
-        y_hat = model(g, g.ndata["feat"])[g.ndata["train_mask"]]
-        y = g.ndata["label"][g.ndata["train_mask"]]
-        loss = torch.nn.CrossEntropyLoss()(y_hat, y)
+        loss = model.loss(g)
         loss.backward()
         optimizer.step()
 
