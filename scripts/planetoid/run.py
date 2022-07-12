@@ -6,14 +6,15 @@ from stag.layers import Stag
 class Model(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        self.layer0 = Stag(1433, 8, 8, num_samples=8, activation=torch.nn.functional.elu)
-        self.layer1 = Stag(64, 7, 1, num_samples=8)
+        self.layer0 = Stag(1433, 8, 8, activation=torch.nn.functional.elu)
+        self.layer1 = Stag(64, 7, 1)
 
     def forward(self, graph, feat):
+        feat = feat.unsqueeze(-2).repeat_interleave(16, -2)
         feat = self.layer0(graph, feat)
         feat = feat.flatten(-2, -1)
         feat = self.layer1(graph, feat)
-        feat = feat.mean((-1, -3))
+        feat = feat.mean((-2, -3))
         return feat
 
 def run():
@@ -61,7 +62,6 @@ def run():
             y = g.ndata["label"][g.ndata["val_mask"]]
             loss = torch.nn.CrossEntropyLoss()(y_hat, y)
             accuracy = float((y_hat.argmax(-1) == y).sum()) / len(y_hat)
-
             if early_stopping([loss, -accuracy], model) is True:
                 model.load_state_dict(early_stopping.best_state)
                 break

@@ -8,7 +8,6 @@ class Stag(torch.nn.Module):
         in_features: int,
         out_features: int,
         num_heads: int,
-        num_samples: int = 1,
         negative_slop: float = 0.2,
         activation: Optional[Callable] = None,
         bias: bool = True,
@@ -16,6 +15,7 @@ class Stag(torch.nn.Module):
         super().__init__()
         self.fc = torch.nn.Linear(in_features, out_features * num_heads, bias=False)
         self.posterior_parameters = torch.nn.Linear(out_features, 4)
+        self.prior = torch.distributions.Normal(0.0, 1.0)
 
         if bias:
             self.bias = torch.nn.Parameter(
@@ -24,13 +24,11 @@ class Stag(torch.nn.Module):
         else:
             self.bias = None
 
-        self.leaky_relu = torch.nn.LeakyReLU(negative_slop)
         self.num_heads = num_heads
-        self.num_samples = num_samples
         self.out_features = out_features
         self.activation = activation
 
-    def forward(self, graph, feat):
+    def _forward(self, graph, feat):
         graph = graph.local_var()
         feat = self.fc(feat)
         feat = feat.reshape(feat.shape[:-1] + (self.num_heads, self.out_features))
@@ -43,19 +41,28 @@ class Stag(torch.nn.Module):
         graph.apply_edges(dgl.function.u_add_v("log_scale_l", "log_scale_r", "log_scale"))
         loc = graph.edata["loc"]
         scale = graph.edata["log_scale"].exp()
-        loc = self.leaky_relu(loc)
-        e = torch.distributions.Normal(loc, scale).rsample((self.num_samples,)).swapaxes(0, 1)
+        e_distribution = torch.distributions.Normal(loc, scale)
+        e = e_distribution.rsample()
         e = dgl.nn.functional.edge_softmax(graph, e)
-        e = e.swapaxes(1, -1)
         graph.edata['a'] = e
-        graph.ndata["ft"] = feat.unsqueeze(-1)
+        graph.ndata["ft"] = feat
         graph.update_all(
             dgl.function.u_mul_e("ft", "a", "m"),
             dgl.function.sum("m", "ft"),
         )
         rst = graph.ndata["ft"]
         if self.bias is not None:
-            rst = rst + self.bias.unsqueeze(-1)
+            rst = rst + self.bias.unsqueeze(0)
         if self.activation is not None:
             rst = self.activation(rst)
+        return rst, e_distribution
+
+    def forward(self, graph, feat):
+        rst, _ = self._forward(graph, feat)
         return rst
+
+    def kl_divergence(self, e_distribution):
+        return torch.distributions.kl_divergence(
+            self.prior,
+            e_distribution,
+        ).mean()
